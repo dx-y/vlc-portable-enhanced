@@ -21,7 +21,7 @@
 
 ## 构建信息
 
-- 上游源码：VLC 官方 3.0.24-beta1
+- 上游源码：[VLC 官方 3.0.24-beta1](https://github.com/videolan/vlc/releases/tag/3.0.24-beta1)（GitHub 镜像；官方自托管见 [code.videolan.org](https://code.videolan.org/videolan/vlc/-/tree/3.0.24-beta1)）
 - 工具链：MSYS2 MinGW-w64 (x86_64)
 - 开源协议：GPLv2+（沿用 VLC 上游协议，源码基于官方开源代码自行编译）
 
