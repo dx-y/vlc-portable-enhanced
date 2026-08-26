@@ -24,3 +24,27 @@
 - 上游源码：VLC 官方 3.0.24-beta1
 - 工具链：MSYS2 MinGW-w64 (x86_64)
 - 开源协议：GPLv2+（沿用 VLC 上游协议，源码基于官方开源代码自行编译）
+
+## 源码与改动说明
+
+本版为基于 VLC 官方源码（3.0.24-beta1）的自编译改版，遵循上游 GPLv2+ 许可，完整许可文本见仓库内 `COPYING.txt`。
+
+代码改动仅涉及 Qt 界面两处源文件，改动能以统一补丁形式在 Release 附件获取（`vlc-3.0.24-beta1.mod.patch`）。配合 VLC 官方对应版本源码即可完整复现本版二进制：
+
+```
+cd vlc-3.0.24-beta1            # VLC 官方源码根目录
+git apply --3way vlc-3.0.24-beta1.mod.patch
+```
+
+- `modules/gui/qt/main_interface.cpp` —— 竖屏视频按可用屏幕等比缩窗（消除左右黑边），窗口越界后自动钳制回屏幕内
+- `modules/gui/qt/components/interface_widgets.cpp` —— 视频窗口内单击播放/暂停（双击或拖动自动取消，不影响原交互）
+
+## 完整性校验
+
+Release 附件 `SHA256SUMS.txt` 提供各文件 SHA-256 校验值，Windows 下核对方法：
+
+```
+certutil -hashfile vlc-3.0.24-beta1-win64.zip SHA256
+```
+
+对比输出与 `SHA256SUMS.txt` 中对应行一致，即确认下载文件完整、未被篡改。
