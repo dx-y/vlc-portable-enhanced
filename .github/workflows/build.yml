@@ -112,7 +112,8 @@ jobs:
             yasm nasm cmake cvs subversion ragel bison flex \
             p7zip-full bzip2 xz-utils zstd dos2unix \
             protobuf-compiler protobuf-c-compiler \
-            libffi-dev libgcrypt20-dev
+            libffi-dev libgcrypt20-dev \
+            nsis msitools
           # 统一使用 posix 线程模型的 mingw 工具链
           for p in x86_64-w64-mingw32-gcc x86_64-w64-mingw32-g++ \
                    x86_64-w64-mingw32-gcc-ar x86_64-w64-mingw32-gcc-nm \
@@ -182,6 +183,21 @@ jobs:
           chmod +x extras/package/win32/build.sh
           ./extras/package/win32/build.sh -a x86_64 -p -r -i r
 
+      - name: 生成安装包（NSIS / MSI）
+        if: env.MODE != 'probe'
+        continue-on-error: true
+        run: |
+          set -uo pipefail
+          cd "vlc-${VLC_VER}/win64"
+          export PATH="/usr/x86_64-w64-mingw32/bin:${PATH}"
+          echo "== release 7z =="
+          make package-win32-release || echo "::warning title=release7z::package-win32-release 失败，仅保留 core 便携包"
+          echo "== NSIS 安装包 =="
+          make package-win32-exe || echo "::warning title=nsis::NSIS 安装包生成失败，本次不提供 setup.exe"
+          echo "== MSI 安装包 =="
+          make package-msi || echo "::warning title=msi::MSI 生成失败，跳过"
+          ls -lh vlc-*.7z vlc-*.exe vlc-*.msi 2>/dev/null || true
+
       - name: 收集产物
         if: env.MODE != 'probe'
         run: |
@@ -212,8 +228,17 @@ jobs:
           TAG="v${VLC_VER}-enhanced"
           gh release create "$TAG" out/* \
             --repo "${{ github.repository }}" \
-            --title "VLC ${VLC_VER} Enhanced Portable (win64)" \
-            --notes "基于 VLC ${VLC_VER} 官方源码自动构建的 Windows x64 便携增强版。
+            --title "VLC ${VLC_VER} Enhanced (win64 便携包 + 安装包)" \
+            --notes "基于 VLC ${VLC_VER} 官方源码自动构建的 Windows x64 增强版，提供**便携包**与**安装包**两种形态，按需任选其一。
+
+          ## 两种形态怎么选
+          | 产物 | 适用场景 | 特点 |
+          | --- | --- | --- |
+          | \`vlc-${VLC_VER}-win64.7z\` / \`.zip\` | 绿色免安装、放 U 盘、多版本共存 | 解压后运行 \`vlc.exe\`，不写注册表；**不自动关联视频文件**，需自行右键设为默认播放器 |
+          | \`vlc-${VLC_VER}-win64.exe\`（NSIS 安装包） | 日常主力使用 | 安装时自动注册文件关联与右键菜单、创建桌面/开始菜单快捷方式、可在"应用和功能"中卸载；**装完双击视频即可直接调用**，无需额外设置默认播放器 |
+          | \`vlc-${VLC_VER}-win64.msi\` | 企业批量部署 / 组策略分发 | 标准 Windows Installer 包，支持静默安装 |
+
+          > 建议：普通使用选 \`.exe\` 安装包；不想动系统就下 \`.7z\` 便携包。
 
           ## 改动内容
           - 竖屏视频按可用屏幕等比缩放窗口，消除左右黑边，越界自动钳制回屏幕内
@@ -222,6 +247,7 @@ jobs:
           ## 构建方式
           - 源码：https://download.videolan.org/pub/videolan/vlc/${VLC_VER}/vlc-${VLC_VER}.tar.xz
           - 工具链：MSYS2/MinGW-w64 交叉编译（x86_64-w64-mingw32）
+          - 打包：7z/zip 便携包 + NSIS setup.exe + MSI
           - 补丁：见附件 $(basename $(ls patches/*.patch | head -n1))
           - 校验：见 SHA256SUMS.txt
 
