@@ -1,0 +1,262 @@
+diff --git a/modules/gui/qt/main_interface.cpp b/modules/gui/qt/main_interface.cpp
+index 8c725f5..39494c6 100644
+--- a/modules/gui/qt/main_interface.cpp
++++ b/modules/gui/qt/main_interface.cpp
+@@ -840,35 +840,63 @@ void MainInterface::setVideoSize( unsigned int w, unsigned int h )
+ #else
+             float factor = 1.0f;
+ #endif
+-            if( (float)h / factor > screen.height() )
++            /* Video size in logical pixels */
++            float videoW = (float)w / factor;
++            float videoH = (float)h / factor;
++
++            /* Compute the usable window area (exclude menus/controls/titlebar) */
++            int availW = screen.width();
++            int availH = screen.height();
++            if( !b_minimalView )
+             {
+-                w = screen.width();
+-                h = screen.height();
+-                if( !b_minimalView )
+-                {
+-                    if( menuBar()->isVisible() )
+-                        h -= menuBar()->height();
+-                    if( controls->isVisible() )
+-                        h -= controls->height();
++                if( menuBar()->isVisible() )
++                    availH -= menuBar()->height();
++                if( controls->isVisible() )
++                    availH -= controls->height();
+ #ifndef QT_NO_STATUSBAR
+-                    if( statusBar()->isVisible() )
+-                        h -= statusBar()->height();
++                if( statusBar()->isVisible() )
++                    availH -= statusBar()->height();
+ #endif
+-                    if( inputC->isVisible() )
+-                        h -= inputC->height();
+-                }
+-                h -= style()->pixelMetric(QStyle::PM_TitleBarHeight);
+-                h -= style()->pixelMetric(QStyle::PM_LayoutBottomMargin);
+-                h -= 2 * style()->pixelMetric(QStyle::PM_DefaultFrameWidth);
+-            }
+-            else
+-            {
+-                // Convert the size in logical pixels
+-                w = qRound( (float)w / factor );
+-                h = qRound( (float)h / factor );
+-                msg_Dbg( p_intf, "Logical video size: %ux%u", w, h );
++                if( inputC->isVisible() )
++                    availH -= inputC->height();
+             }
++            availH -= style()->pixelMetric(QStyle::PM_TitleBarHeight);
++            availH -= style()->pixelMetric(QStyle::PM_LayoutBottomMargin);
++            availH -= 2 * style()->pixelMetric(QStyle::PM_DefaultFrameWidth);
++
++            /* Fit the video inside the usable area, preserving aspect ratio.
++             * This fixes very tall (vertical) videos: the old code forced the
++             * window width to the full screen width, producing pillarboxing. */
++            float scale = qMin( (float)availW / videoW, (float)availH / videoH );
++            scale = qMin( scale, 1.0f );
++            w = qRound( videoW * scale );
++            h = qRound( videoH * scale );
++            msg_Dbg( p_intf, "Logical video size: %ux%u (scale %f)", w, h, scale );
+             videoWidget->setSize( w, h );
++
++            /* After a vertical-fit resize the window must stay fully
++             * inside the usable screen area; otherwise the narrow window
++             * could be left partially off-screen (e.g. x=-86). */
++            QTimer::singleShot( 0, this, [this]()
++            {
++                if( isFullScreen() || isMaximized() )
++                    return;
++                QScreen *scr = QGuiApplication::primaryScreen();
++                if( scr == NULL )
++                    return;
++                QRect a = scr->availableGeometry();
++                QPoint p = pos();
++                int nx = p.x(), ny = p.y();
++                if( nx < a.left() ) nx = a.left();
++                if( nx + width() > a.right() ) nx = a.right() - width() + 1;
++                if( ny < a.top() ) ny = a.top();
++                if( ny + height() > a.bottom() ) ny = a.bottom() - height() + 1;
++                if( nx != p.x() || ny != p.y() )
++                {
++                    msg_Dbg( p_intf, "Clamping window position to %d,%d", nx, ny );
++                    move( nx, ny );
++                }
++            } );
+         }
+         else
+             videoWidget->setSize( videoWidget->width(), videoWidget->height() );
+diff --git a/modules/gui/qt/components/interface_widgets.cpp b/modules/gui/qt/components/interface_widgets.cpp
+index cb48dc5..c76e08a 100644
+--- a/modules/gui/qt/components/interface_widgets.cpp
++++ b/modules/gui/qt/components/interface_widgets.cpp
+@@ -87,15 +87,121 @@ VideoWidget::VideoWidget( intf_thread_t *_p_i, QWidget* p_parent )
+     stable = NULL;
+     p_window = NULL;
+     qApp->installNativeEventFilter(this);
++    /* Single click toggles play/pause; cancelled by double click or drag */
++    clickToPauseTimer = new QTimer( this );
++    clickToPauseTimer->setSingleShot( true );
++    clickToPauseTimer->setInterval( 250 );
++    connect( clickToPauseTimer, &QTimer::timeout, this, [this]() {
++        if( p_window && enable_mouse_events )
++            THEMIM->togglePlayPause();
++    } );
+     show();
+ }
+ 
++void VideoWidget::cancelClickToPause()
++{
++    if( clickToPauseTimer )
++        clickToPauseTimer->stop();
++}
++
+ VideoWidget::~VideoWidget()
+ {
+     /* Ensure we are not leaking the video output. This would crash. */
+     assert( !stable );
+     assert( !p_window );
++    teardownMouseHook();
++}
++
++#ifdef _WIN32
++HHOOK      VideoWidget::g_mouseHook   = NULL;
++VideoWidget *VideoWidget::g_hookOwner = NULL;
++POINT      VideoWidget::g_clickPt     = { 0, 0 };
++bool       VideoWidget::g_dragging    = false;
++
++HWND VideoWidget::currentVideoHwnd() const
++{
++    if( !stable )
++        return NULL;
++    /* The video renders into stable's native child window; clicks land on
++     * either stable itself or its descendant "VLC video output" window. */
++    QWindow *window = stable->windowHandle();
++    if( !window )
++        return NULL;
++    return static_cast<HWND>( QGuiApplication::platformNativeInterface()
++        ->nativeResourceForWindow( "handle", window ) );
++}
++
++void VideoWidget::setupMouseHook()
++{
++    if( g_mouseHook )
++        return;
++    g_hookOwner = this;
++    g_dragging  = false;
++    g_mouseHook = SetWindowsHookEx( WH_MOUSE_LL, mouseLLHookProc,
++                                    GetModuleHandle( NULL ), 0 );
++    if( g_mouseHook )
++        msg_Dbg( p_intf, "single-click pause: low-level mouse hook installed" );
++    else
++        msg_Warn( p_intf, "single-click pause: failed to install mouse hook" );
++}
++
++void VideoWidget::teardownMouseHook()
++{
++    if( g_mouseHook )
++    {
++        UnhookWindowsHookEx( g_mouseHook );
++        g_mouseHook = NULL;
++    }
++    if( g_hookOwner == this )
++        g_hookOwner = NULL;
++}
++
++LRESULT CALLBACK VideoWidget::mouseLLHookProc( int nCode, WPARAM wParam,
++                                               LPARAM lParam )
++{
++    if( nCode == HC_ACTION && g_hookOwner )
++    {
++        MSLLHOOKSTRUCT *pms = reinterpret_cast<MSLLHOOKSTRUCT*>( lParam );
++        HWND vid  = g_hookOwner->currentVideoHwnd();
++        if( vid && vid != GetDesktopWindow() )
++        {
++            HWND target = ::WindowFromPoint( pms->pt );
++            /* single/double click or drag lands on the video window itself
++             * or one of its descendants (e.g. "VLC video output") */
++            bool bHit = ( target == vid || IsChild( vid, target ) );
++            if( bHit )
++            {
++                if( wParam == WM_LBUTTONDOWN )
++                {
++                    g_clickPt  = pms->pt;
++                    g_dragging = false;
++                    if( g_hookOwner->clickToPauseTimer )
++                        g_hookOwner->clickToPauseTimer->start();
++                }
++                else if( wParam == WM_LBUTTONDBLCLK )
++                {
++                    g_hookOwner->cancelClickToPause();
++                }
++                else if( wParam == WM_MOUSEMOVE )
++                {
++                    /* A drag should cancel the single-click pause */
++                    if( !g_dragging )
++                    {
++                        int dx = pms->pt.x - g_clickPt.x;
++                        int dy = pms->pt.y - g_clickPt.y;
++                        if( abs(dx) + abs(dy) > 5 )
++                        {
++                            g_dragging = true;
++                            g_hookOwner->cancelClickToPause();
++                        }
++                    }
++                }
++            }
++        }
++    }
++    return CallNextHookEx( NULL, nCode, wParam, lParam );
+ }
++#endif
+ 
+ void VideoWidget::sync( void )
+ {
+@@ -165,6 +271,7 @@ bool VideoWidget::request( struct vout_window_t *p_wnd )
+     }
+ 
+     enable_mouse_events = var_InheritBool(p_window, "mouse-events");
++    setupMouseHook();
+     return true;
+ }
+ 
+@@ -332,6 +439,9 @@ void VideoWidget::mousePressEvent( QMouseEvent* event )
+     if( vlc_button >= 0 )
+     {
+         vout_window_ReportMousePressed( p_window, vlc_button );
++        /* Start single-click detection on left button release */
++        if( vlc_button == 0 && clickToPauseTimer )
++            clickToPauseTimer->start();
+         event->accept();
+         return;
+     }
+@@ -341,6 +451,8 @@ void VideoWidget::mousePressEvent( QMouseEvent* event )
+ 
+ void VideoWidget::mouseMoveEvent( QMouseEvent *event )
+ {
++    /* A drag should not trigger the single-click play/pause toggle */
++    cancelClickToPause();
+     if ( !p_window || !enable_mouse_events )
+     {
+         event->ignore();
+@@ -365,6 +477,8 @@ void VideoWidget::mouseMoveEvent( QMouseEvent *event )
+ 
+ void VideoWidget::mouseDoubleClickEvent( QMouseEvent *event )
+ {
++    /* Double click should not trigger the single-click play/pause toggle */
++    cancelClickToPause();
+     if ( !p_window || !enable_mouse_events )
+     {
+         event->ignore();
+@@ -396,6 +510,7 @@ void VideoWidget::release( bool forced )
+         stable = NULL;
+         p_window = NULL;
+     }
++    teardownMouseHook();
+ 
+     updateGeometry();
+ }
