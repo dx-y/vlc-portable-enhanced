@@ -127,12 +127,24 @@ jobs:
       - name: 获取 VLC 源码
         run: |
           set -euo pipefail
-          curl -fSL --retry 5 --retry-delay 5 -o vlc-src.tar.xz \
-            "https://download.videolan.org/pub/videolan/vlc/${VLC_VER}/vlc-${VLC_VER}.tar.xz"
-          ls -lh vlc-src.tar.xz
-          tar xf vlc-src.tar.xz
+          # 官方 tar.xz 由 make dist 生成，不含 extras/package/win32 打包脚本，
+          # 因此优先 git clone 取完整工作树（含 build.sh / NSIS / MSI 打包脚本）。
+          if git clone --depth 1 --branch "${VLC_VER}" \
+               https://github.com/videolan/vlc.git "vlc-${VLC_VER}"; then
+            echo "源码来源：git clone videolan/vlc tag ${VLC_VER}"
+          else
+            echo "::warning::git clone 失败，回退官方 tar.xz"
+            curl -fSL --retry 5 --retry-delay 5 -o vlc-src.tar.xz \
+              "https://download.videolan.org/pub/videolan/vlc/${VLC_VER}/vlc-${VLC_VER}.tar.xz"
+            tar xf vlc-src.tar.xz
+          fi
           test -d "vlc-${VLC_VER}"
-          echo "源码目录：vlc-${VLC_VER}"
+          if [ ! -f "vlc-${VLC_VER}/extras/package/win32/build.sh" ]; then
+            echo "::error::源码缺少 extras/package/win32/build.sh，无法交叉编译打包"
+            ls -la "vlc-${VLC_VER}/extras/package" || true
+            exit 1
+          fi
+          echo "源码目录：vlc-${VLC_VER}（已确认含 win32 打包脚本）"
 
       - name: 应用自制补丁
         run: |
