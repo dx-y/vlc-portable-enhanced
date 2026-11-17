@@ -177,40 +177,72 @@ jobs:
         if: env.MODE == 'probe'
         run: |
           set -euo pipefail
-          cd "vlc-${VLC_VER}"
-          make -C contrib prebuilt PREBUILT_URL="${CONTRIB_URL}"
-          ls contrib/x86_64-w64-mingw32 | head -n 20
-          ./bootstrap
-          cd extras/package/win32
-          ./configure.sh --host=x86_64-w64-mingw32 \
-            --with-contrib="$PWD/../../../contrib/x86_64-w64-mingw32" \
-            --enable-qt --disable-nls
-          echo "== configure 通过 =="
+          IMAGE="registry.videolan.org/vlc-debian-win64:latest"
+          docker pull "$IMAGE"
+          echo "== 容器内工具链自检 =="
+          docker run --rm "$IMAGE" bash -lc '
+            x86_64-w64-mingw32-gcc --version | head -n1
+            if printf "#include <crtdefs.h>\n#if defined(_UCRT) || (__MSVCRT_VERSION__ >= 0x1400)\n# error UCRT\n#endif\n" | x86_64-w64-mingw32-gcc -E - >/dev/null 2>&1; then echo "CRT=msvcrt"; else echo "CRT=ucrt"; fi
+            which nsis makensis msiinfo 7z 2>/dev/null || true
+          '
+          echo "== 预编译 contrib 解压验证 =="
+          docker run --rm -v "$GITHUB_WORKSPACE":/build -w /build \
+            -e VLC_VER="${VLC_VER}" -e CONTRIB_URL="${CONTRIB_URL}" "$IMAGE" bash -lc '
+              set -euo pipefail
+              cd "vlc-${VLC_VER}"
+              make -C contrib prebuilt PREBUILT_URL="${CONTRIB_URL}"
+              ls contrib | head -n 20
+              ls contrib/x86_64-w64-mingw32/lib/libgcrypt.a contrib/x86_64-w64-mingw32ucrt/lib/libgcrypt.a 2>/dev/null || true
+            '
+          echo "== probe 完成 =="
 
-      - name: 完整构建
+      - name: 完整构建（官方容器 · UCRT 工具链）
         if: env.MODE != 'probe'
         run: |
           set -euo pipefail
-          cd "vlc-${VLC_VER}"
-          export MAKEFLAGS="-j$(nproc)"
-          export VLC_PREBUILT_CONTRIBS_URL="${CONTRIB_URL}"
-          chmod +x extras/package/win32/build.sh
-          ./extras/package/win32/build.sh -a x86_64 -p -r -i r
+          IMAGE="registry.videolan.org/vlc-debian-win64:latest"
+          docker pull "$IMAGE"
+          echo "== 容器内工具链自检 =="
+          docker run --rm "$IMAGE" bash -lc '
+            x86_64-w64-mingw32-gcc --version | head -n1
+            if printf "#include <crtdefs.h>\n#if defined(_UCRT) || (__MSVCRT_VERSION__ >= 0x1400)\n# error UCRT\n#endif\n" | x86_64-w64-mingw32-gcc -E - >/dev/null 2>&1; then echo "CRT=msvcrt"; else echo "CRT=ucrt"; fi
+          '
+          docker run --rm \
+            -v "$GITHUB_WORKSPACE":/build -w /build \
+            -e VLC_VER="${VLC_VER}" -e CONTRIB_URL="${CONTRIB_URL}" \
+            "$IMAGE" bash -lc '
+              set -euo pipefail
+              cd "vlc-${VLC_VER}"
+              export MAKEFLAGS="-j$(nproc)"
+              export VLC_PREBUILT_CONTRIBS_URL="${CONTRIB_URL}"
+              chmod +x extras/package/win32/build.sh
+              UC=""
+              if ! printf "#include <crtdefs.h>\n#if defined(_UCRT) || (__MSVCRT_VERSION__ >= 0x1400)\n# error UCRT\n#endif\n" | x86_64-w64-mingw32-gcc -E - >/dev/null 2>&1; then UC="-u"; fi
+              echo "UCRT 参数：${UC:-无（msvcrt 工具链）}"
+              ./extras/package/win32/build.sh -a x86_64 -p -r -i r $UC
+            '
+          sudo chown -R "$(id -u):$(id -g)" .
 
       - name: 生成安装包（NSIS / MSI）
         if: env.MODE != 'probe'
         continue-on-error: true
         run: |
           set -uo pipefail
-          cd "vlc-${VLC_VER}/win64"
-          export PATH="/usr/x86_64-w64-mingw32/bin:${PATH}"
-          echo "== release 7z =="
-          make package-win32-release || echo "::warning title=release7z::package-win32-release 失败，仅保留 core 便携包"
-          echo "== NSIS 安装包 =="
-          make package-win32-exe || echo "::warning title=nsis::NSIS 安装包生成失败，本次不提供 setup.exe"
-          echo "== MSI 安装包 =="
-          make package-msi || echo "::warning title=msi::MSI 生成失败，跳过"
-          ls -lh vlc-*.7z vlc-*.exe vlc-*.msi 2>/dev/null || true
+          IMAGE="registry.videolan.org/vlc-debian-win64:latest"
+          docker run --rm -v "$GITHUB_WORKSPACE":/build -w /build \
+            -e VLC_VER="${VLC_VER}" "$IMAGE" bash -lc '
+              set -uo pipefail
+              cd "vlc-${VLC_VER}/win64" || { echo "win64 构建目录不存在"; exit 1; }
+              export PATH="/usr/x86_64-w64-mingw32/bin:${PATH}"
+              echo "== release 7z =="
+              make package-win32-release || echo "::warning title=release7z::package-win32-release 失败，仅保留 core 便携包"
+              echo "== NSIS 安装包 =="
+              make package-win32-exe || echo "::warning title=nsis::NSIS 安装包生成失败，本次不提供 setup.exe"
+              echo "== MSI 安装包 =="
+              make package-msi || echo "::warning title=msi::MSI 生成失败，跳过"
+              ls -lh vlc-*.7z vlc-*.exe vlc-*.msi 2>/dev/null || true
+            '
+          sudo chown -R "$(id -u):$(id -g)" .
 
       - name: 收集产物
         if: env.MODE != 'probe'
