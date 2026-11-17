@@ -150,11 +150,13 @@ jobs:
         run: |
           set -euo pipefail
           cd "vlc-${VLC_VER}"
-          git init -q .
+          # git clone 场景下 .git 已存在且工作树干净，无需再建基线提交；
+          # tar 包场景下无 .git，需初始化并提交一次以便 git apply --3way 使用。
+          if [ ! -d .git ]; then git init -q .; fi
           git config user.email "actions@github.com"
           git config user.name "GitHub Actions"
           git add -A
-          git commit -qm "upstream ${VLC_VER}"
+          git commit -qm "upstream ${VLC_VER}" || echo "工作树与上游 ${VLC_VER} 一致，跳过基线提交"
           shopt -s nullglob
           for p in "${GITHUB_WORKSPACE}"/patches/*.patch; do
             echo "::group::应用 $(basename "$p")"
