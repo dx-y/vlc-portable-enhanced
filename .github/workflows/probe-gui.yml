@@ -132,7 +132,7 @@ jobs:
           URL="${CONTRIB_URL:-$DEFAULT_CONTRIB_URL}"
           echo "VLC=$VLC_VER  CONTRIB=$URL"
           echo "build-tree cache hit: ${{ steps.cache-src.outputs.cache-hit }}  (true=增量编译)"
-          docker run --rm \
+          docker run --rm --user root \
             -v "$PWD":/build \
             -w /build \
             -e VLC_VER="$VLC_VER" \
