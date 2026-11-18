@@ -266,6 +266,19 @@ else
     grep -iE "qt" config.mak | head -15 || true
 fi
 
+# 官方预编译 contrib 的 .la/.pc 保留 @@CONTRIB_PREFIX@@ 占位符，libtool 读取
+# dependency_libs 时会拿到非法路径，必须先按实际绝对路径替换
+CONTRIB_ABS=$(readlink -f "$SRC/contrib/$CONTRIB_PREFIX" 2>/dev/null || echo "$SRC/contrib/$CONTRIB_PREFIX")
+LACNT=0
+while IFS= read -r f; do
+    if grep -q "@@CONTRIB_PREFIX@@" "$f" 2>/dev/null; then
+        sed -i "s|@@CONTRIB_PREFIX@@|$CONTRIB_ABS|g" "$f"
+        LACNT=$((LACNT+1))
+    fi
+done < <(find "$CONTRIB_ABS" -type f \( -name '*.la' -o -name '*.pc' \) 2>/dev/null)
+echo "contrib 路径: $CONTRIB_ABS"
+echo "替换 @@CONTRIB_PREFIX@@ 的文件数: $LACNT"
+
 # ---------------------------------------------------------------- 6. 只编 GUI 模块
 step "6/6 编译 libvlccore + Qt GUI 插件"
 
