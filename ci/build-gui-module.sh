@@ -34,14 +34,24 @@ cd "$SRC"
 echo "源码体积: $(du -sh "$SRC" | cut -f1)"
 step "2/6 应用增强补丁"
 if [ -f /build/patch.diff ]; then
-    git init -q . 2>/dev/null || true
-    git add -A >/dev/null 2>&1 || true
-    git -c user.email=ci@local -c user.name=ci commit -qm "upstream $VLC_VER" >/dev/null 2>&1 || true
-    if git apply --3way --verbose /build/patch.diff; then
-        echo "补丁应用成功"
+    if git apply --reverse --check /build/patch.diff >/dev/null 2>&1; then
+        echo "补丁已存在于缓存源码中，跳过应用（保持对象文件时间戳不变）"
     else
-        echo "::error::补丁应用失败，需更新 patches/ 下的补丁"
-        exit 2
+        git init -q . 2>/dev/null || true
+        git add -A >/dev/null 2>&1 || true
+        git -c user.email=ci@local -c user.name=ci commit -qm "upstream $VLC_VER" >/dev/null 2>&1 || true
+        if git apply --3way --verbose /build/patch.diff; then
+            echo "补丁应用成功"
+        else
+            echo "::warning::3way 应用失败，尝试重置源码后重新应用"
+            git checkout -- . >/dev/null 2>&1 || true
+            if git apply --verbose /build/patch.diff; then
+                echo "重置后补丁应用成功"
+            else
+                echo "::error::补丁应用失败，需更新 patches/ 下的补丁"
+                exit 2
+            fi
+        fi
     fi
 else
     echo "未提供补丁，跳过"
@@ -50,12 +60,24 @@ fi
 # ---------------------------------------------------------------- 3. 构建工具
 step "3/6 准备 extras/tools"
 cd "$SRC/extras/tools"
-if [ -x ./configure ] || [ -f Makefile ]; then
-    make -j"$(nproc)" >/dev/null 2>&1 || make -j"$(nproc)" || true
-else
-    ./bootstrap >/dev/null 2>&1 && make -j"$(nproc)" >/dev/null 2>&1 || true
+if [ ! -f Makefile ]; then
+    echo "extras/tools 未配置，执行 bootstrap"
+    ./bootstrap > /tmp/tools-boot.log 2>&1 || { echo "::error::extras/tools bootstrap 失败"; tail -25 /tmp/tools-boot.log; exit 9; }
+fi
+set +e
+make -j"$(nproc)" > /tmp/tools-make.log 2>&1
+TRC=$?
+set -e
+if [ $TRC -ne 0 ]; then
+    echo "::error::extras/tools 编译失败 (rc=$TRC)"
+    tail -35 /tmp/tools-make.log
+    exit 9
 fi
 cd "$SRC"
+# 官方 build.sh 也把这份自编工具链放到 PATH 最前，configure/bootstrap 依赖它
+export PATH="$SRC/extras/tools/build/bin:$PATH"
+echo "autoconf: $(command -v autoconf || echo MISSING)"
+echo "automake: $(command -v automake || echo MISSING)"
 
 # ---------------------------------------------------------------- 4. 预编译 contrib
 # 注意：官方镜像内没有 curl/wget，下载一律在 runner 侧完成，容器只负责使用。
@@ -78,7 +100,7 @@ elif [ -d /build/work/contrib-extract ]; then
         exit 4
     fi
     echo "使用宿主 contrib: $CB"
-    cp -a "$CB" "../$CONTRIB_PREFIX"
+    cp -aT "$CB" "../$CONTRIB_PREFIX"
 else
     echo "::error::宿主未提供预编译 contrib（预期 /build/work/contrib-extract）"
     exit 4
@@ -92,20 +114,38 @@ export PATH="$SRC/contrib/$CONTRIB_PREFIX/bin:$PATH"
 # configure.sh 内部按 $(dirname $0)/../../../configure 定位，必须在源码根目录执行
 step "5/6 configure（复用官方 configure.sh）"
 cd "$SRC"
-set +o pipefail
-./extras/package/win32/configure.sh \
-    --host="$TRIPLET" \
-    --with-contrib="../contrib/$CONTRIB_PREFIX" \
-    > /tmp/cfg.log 2>&1
-RC=$?
-set -o pipefail
-tail -70 /tmp/cfg.log
-if [ $RC -ne 0 ]; then
-    echo "::error::configure 失败 (rc=$RC)"
-    grep -iE "error|cannot|not found|No package" /tmp/cfg.log | tail -30 || true
-    exit 6
+if [ -f config.mak ] && [ -f Makefile ] && [ -f modules/Makefile ]; then
+    echo "configure 产物已在缓存中，跳过重跑（避免刷新 config.mak 触发全量重编）"
+    grep -E "^(CFLAGS|CXXFLAGS)=" config.mak | head -2 || true
+else
+    if [ ! -x ./configure ]; then
+        echo "源码根缺少 configure（git 仓库不自带），执行 bootstrap 生成"
+        set +e
+        ./bootstrap > /tmp/boot.log 2>&1
+        BRC=$?
+        set -e
+        tail -25 /tmp/boot.log
+        if [ $BRC -ne 0 ] || [ ! -x ./configure ]; then
+            echo "::error::源码 bootstrap 失败 (rc=$BRC)"
+            exit 6
+        fi
+        echo "bootstrap 完成"
+    fi
+    set +e
+    ./extras/package/win32/configure.sh \
+        --host="$TRIPLET" \
+        --with-contrib="../contrib/$CONTRIB_PREFIX" \
+        > /tmp/cfg.log 2>&1
+    RC=$?
+    set -e
+    tail -70 /tmp/cfg.log
+    if [ $RC -ne 0 ]; then
+        echo "::error::configure 失败 (rc=$RC)"
+        grep -iE "error|cannot|not found|No package" /tmp/cfg.log | tail -30 || true
+        exit 6
+    fi
+    echo "configure 完成"; grep -E "^(CFLAGS|CXXFLAGS)=" config.mak | head -2 || true
 fi
-echo "configure 完成"; grep -E "^(CFLAGS|CXXFLAGS)=" config.mak | head -2 || true
 
 # ---------------------------------------------------------------- 6. 只编 GUI 模块
 step "6/6 编译 libvlccore + Qt GUI 插件"
@@ -129,6 +169,7 @@ PIRC=$?
 set -e
 [ $PIRC -eq 0 ] || echo "::warning::po 构建跳过 (rc=$PIRC)"
 
+echo "对象文件数: $(find . -name '*.o' 2>/dev/null | wc -l)"
 set +e
 make -j"$(nproc)" -C modules/gui/qt > /tmp/mk_qt.log 2>&1
 RC=$?
