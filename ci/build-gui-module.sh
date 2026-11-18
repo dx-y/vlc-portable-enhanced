@@ -146,7 +146,7 @@ else
     set +e
     ./extras/package/win32/configure.sh \
         --host="$TRIPLET" \
-        --with-contrib="../contrib/$CONTRIB_PREFIX" \
+        --with-contrib="$SRC/contrib/$CONTRIB_PREFIX" \
         > /tmp/cfg.log 2>&1
     RC=$?
     set -e
