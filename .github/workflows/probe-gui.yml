@@ -123,6 +123,15 @@ jobs:
           test -d work/contrib-extract/x86_64-w64-mingw32/include || { echo "::error::contrib 缺少 include"; exit 3; }
           echo "标志文件: $(ls work/contrib-extract/x86_64-w64-mingw32/lib/libQt5Core.a 2>/dev/null || echo '未找到 libQt5Core.a')"
 
+      - name: Prepare newer glibc for Qt host tools
+        run: |
+          set -euo pipefail
+          mkdir -p debs glibc-root
+          cd debs
+          apt-get download libc6 libstdc++6 libgcc-s1
+          for f in *.deb; do dpkg-deb -x "$f" ../glibc-root; done
+          ls -l ../glibc-root/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2
+
       - name: Build (container)
         env:
           VLC_VER: ${{ steps.ver.outputs.version }}
@@ -138,6 +147,7 @@ jobs:
             -e VLC_VER="$VLC_VER" \
             -e CONTRIB_URL="$URL" \
             -e WORK=/build/work \
+            -v "$PWD/glibc-root":/opt/glibc:ro \
             registry.videolan.org/vlc-debian-win64:20240122094311 \
             bash /build/ci/build-gui-module.sh 2>&1 | tee build.log
           echo "exit=${PIPESTATUS[0]}"

@@ -142,9 +142,30 @@ for t in moc rcc uic; do printf "%s: " "$t"; command -v "$t" || echo MISSING; do
 
 # configure.sh 内部会重置 PATH，导致 AC_CHECK_PROGS 找不到宿主 Qt 工具，
 # 直接以环境变量显式指定（autoconf 优先采用环境变量）
-export MOC="$SRC/contrib/$CONTRIB_PREFIX/bin/moc"
-export RCC="$SRC/contrib/$CONTRIB_PREFIX/bin/rcc"
-export UIC="$SRC/contrib/$CONTRIB_PREFIX/bin/uic"
+# 官方 contrib 的 Qt 宿主工具需求新 glibc，容器自带 glibc 较旧 -> 用 /opt/glibc 里的动态链接器包装
+QTWRAP=/tmp/qtwrap
+mkdir -p "$QTWRAP"
+NEWLD=/opt/glibc/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2
+if [ -x "$NEWLD" ]; then
+    LIBS="/opt/glibc/lib/x86_64-linux-gnu:/opt/glibc/usr/lib/x86_64-linux-gnu"
+    for t in moc rcc uic; do
+        cat > "$QTWRAP/$t" <<WRAPEOF
+#!/bin/sh
+exec $NEWLD --library-path $LIBS $SRC/contrib/$CONTRIB_PREFIX/bin/$t "\$@"
+WRAPEOF
+        chmod +x "$QTWRAP/$t"
+    done
+    echo "--- 包装后的 moc 自检 ---"
+    "$QTWRAP/moc" -v 2>&1 | head -3 || echo "MOC 包装失败"
+    export MOC="$QTWRAP/moc"
+    export RCC="$QTWRAP/rcc"
+    export UIC="$QTWRAP/uic"
+else
+    echo "!! 未找到 /opt/glibc 动态链接器，回退直用 contrib 工具"
+    export MOC="$SRC/contrib/$CONTRIB_PREFIX/bin/moc"
+    export RCC="$SRC/contrib/$CONTRIB_PREFIX/bin/rcc"
+    export UIC="$SRC/contrib/$CONTRIB_PREFIX/bin/uic"
+fi
 # AC_CHECK_PROGS 不读 MOC 环境变量，但读 autoconf 缓存变量 ac_cv_prog_*
 export ac_cv_prog_MOC="$MOC"
 export ac_cv_prog_RCC="$RCC"
@@ -152,8 +173,8 @@ export ac_cv_prog_UIC="$UIC"
 echo "MOC=$MOC RCC=$RCC UIC=$UIC"
 echo "--- 容器系统 ---"; cat /etc/os-release 2>/dev/null | head -3
 QTINC="-I$SRC/contrib/$CONTRIB_PREFIX/include -I$SRC/contrib/$CONTRIB_PREFIX/include/QtCore -I$SRC/contrib/$CONTRIB_PREFIX/include/QtGui -I$SRC/contrib/$CONTRIB_PREFIX/include/QtWidgets"
-export CXXFLAGS="$CXXFLAGS $QTINC"
-export CFLAGS="$CFLAGS $QTINC"
+export CXXFLAGS="${CXXFLAGS:-} $QTINC"
+export CFLAGS="${CFLAGS:-} $QTINC"
 echo "CXXFLAGS=$CXXFLAGS"
 echo "--- 官方 configure.sh 的关键行 ---"
 grep -nE "PATH|MOC|qt|OPTIONS" "$SRC/extras/package/win32/configure.sh" | head -20 || true
