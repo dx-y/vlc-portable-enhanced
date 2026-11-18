@@ -257,25 +257,19 @@ find . -name Makefile -path "*qt*" 2>/dev/null | head -5
 echo "--- modules/Makefile 中 qt 目标样本 ---"
 grep -oE "^[A-Za-z0-9_./-]+_plugin\.la:" modules/Makefile 2>/dev/null | head -10 || true
 QT_OK=0
-for T in "modules/gui/qt/libqt_plugin.la" "libqt_plugin.la" "modules/libqt_plugin.la"; do
-    echo "--- 尝试目标: $T"
+for T in "gui/qt/libqt_plugin.la" "libqt_plugin.la"; do
+    echo "--- 尝试目标: modules/$T"
     set +e
-    if [ "${T#modules/}" != "$T" ]; then
-        make -j"$(nproc)" -C modules "$(basename "$T")" > /tmp/mk_qt.log 2>&1 || \
-        make -j"$(nproc)" "$T" > /tmp/mk_qt.log 2>&1
-        RC=$?
-    else
-        make -j"$(nproc)" "$T" > /tmp/mk_qt.log 2>&1
-        RC=$?
-    fi
+    make -j"$(nproc)" -C modules "$T" > /tmp/mk_qt.log 2>&1
+    RC=$?
     set -e
     tail -25 /tmp/mk_qt.log
     if [ $RC -eq 0 ]; then
-        echo "Qt GUI 插件编译成功: $T"
+        echo "Qt GUI 插件编译成功: modules/$T"
         QT_OK=1
         break
     fi
-    echo "--- 目标失败 (rc=$RC): $T"
+    echo "--- 目标失败 (rc=$RC): modules/$T"
 done
 
 if [ "$QT_OK" -ne 1 ]; then
