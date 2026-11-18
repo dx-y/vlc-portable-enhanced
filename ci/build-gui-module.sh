@@ -89,24 +89,58 @@ cd "$SRC"
 export PATH="$SRC/contrib/$CONTRIB_PREFIX/bin:$PATH"
 
 # ---------------------------------------------------------------- 5. 配置
+# configure.sh 内部按 $(dirname $0)/../../../configure 定位，必须在源码根目录执行
 step "5/6 configure（复用官方 configure.sh）"
-rm -rf "build-gui" && mkdir -p "build-gui"
-cd "build-gui"
-../extras/package/win32/configure.sh \
+cd "$SRC"
+set +o pipefail
+./extras/package/win32/configure.sh \
     --host="$TRIPLET" \
     --with-contrib="../contrib/$CONTRIB_PREFIX" \
-    2>&1 | tail -40
-echo "configure 完成"
+    > /tmp/cfg.log 2>&1
+RC=$?
+set -o pipefail
+tail -70 /tmp/cfg.log
+if [ $RC -ne 0 ]; then
+    echo "::error::configure 失败 (rc=$RC)"
+    grep -iE "error|cannot|not found|No package" /tmp/cfg.log | tail -30 || true
+    exit 6
+fi
+echo "configure 完成"; grep -E "^(CFLAGS|CXXFLAGS)=" config.mak | head -2 || true
 
 # ---------------------------------------------------------------- 6. 只编 GUI 模块
 step "6/6 编译 libvlccore + Qt GUI 插件"
-make -j"$(nproc)" -C src 2>&1 | tail -20
+
+set +e
+make -j"$(nproc)" -C src > /tmp/mk_core.log 2>&1
+RC=$?
+set -e
+tail -25 /tmp/mk_core.log
+if [ $RC -ne 0 ]; then
+    echo "::error::libvlccore 编译失败 (rc=$RC)"
+    grep -iE "error|Error [0-9]" /tmp/mk_core.log | tail -40 || true
+    exit 7
+fi
 echo "libvlccore 编译完成"
 
-# qt 模块依赖 po 生成的 .qm 翻译，先尝试构建 po
-make -j"$(nproc)" -C po >/dev/null 2>&1 || echo "::warning::po 构建跳过"
+# qt 模块依赖 po 生成的 .qm 翻译
+set +e
+make -j"$(nproc)" -C po > /tmp/mk_po.log 2>&1
+PIRC=$?
+set -e
+[ $PIRC -eq 0 ] || echo "::warning::po 构建跳过 (rc=$PIRC)"
 
-make -j"$(nproc)" -C modules/gui/qt 2>&1 | tail -40
+set +e
+make -j"$(nproc)" -C modules/gui/qt > /tmp/mk_qt.log 2>&1
+RC=$?
+set -e
+tail -35 /tmp/mk_qt.log
+if [ $RC -ne 0 ]; then
+    echo "::error::Qt GUI 模块编译失败 (rc=$RC)"
+    grep -iE "error|Error [0-9]" /tmp/mk_qt.log | tail -40 || true
+    echo "--- 关键上下文 ---"
+    grep -nE "moc|uic|rcc|qmake|fatal" /tmp/mk_qt.log | tail -20 || true
+    exit 8
+fi
 
 step "收集产物"
 mkdir -p /build/out
