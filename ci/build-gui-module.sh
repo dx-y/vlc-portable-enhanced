@@ -247,6 +247,15 @@ echo "对象文件数: $(find . -name '*.o' 2>/dev/null | wc -l)"
 # VLC 3.0 的 modules 是非递归 automake，没有 modules/gui/qt/Makefile，
 # 需在源码根按 .la 目标构建 Qt 插件
 echo "Makefile 中 libqt_plugin 目标数: $(grep -c libqt_plugin Makefile || true)"
+echo "--- config.h 中 Qt 宏 ---"
+grep -iE "HAVE_QT|ENABLE_QT|QT5" config.h | head -10 || echo "(无)"
+echo "--- modules/Makefile 中 qt 相关 ---"
+grep -c "qt_plugin" modules/Makefile 2>/dev/null || echo "modules/Makefile 无 qt_plugin"
+grep -oE "^[A-Za-z0-9_./-]*qt_plugin[A-Za-z0-9_./-]*(\.la|\.dll)?:" modules/Makefile 2>/dev/null | head -10 || true
+echo "--- 含 qt 的 Makefile ---"
+find . -name Makefile -path "*qt*" 2>/dev/null | head -5
+echo "--- modules/Makefile 中 qt 目标样本 ---"
+grep -oE "^[A-Za-z0-9_./-]+_plugin\.la:" modules/Makefile 2>/dev/null | head -10 || true
 QT_OK=0
 for T in "modules/gui/qt/libqt_plugin.la" "libqt_plugin.la" "modules/libqt_plugin.la"; do
     echo "--- 尝试目标: $T"
