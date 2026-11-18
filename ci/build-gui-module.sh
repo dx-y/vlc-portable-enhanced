@@ -41,6 +41,13 @@ fi
 cd "$SRC"
 [ -f modules/gui/qt/main_interface.cpp ] || { echo "::error::源码目录不完整，缺少 modules/gui/qt/main_interface.cpp"; exit 5; }
 echo "源码体积: $(du -sh "$SRC" | cut -f1)"
+echo "--- 源码身份诊断 ---"
+grep -m1 "AC_INIT" configure.ac || true
+git -C "$SRC" describe --tags 2>/dev/null || echo "(无 git 描述)"
+echo "cpp 行数: $(wc -l < modules/gui/qt/components/interface_widgets.cpp)"
+echo "cpp 中 MouseHook 命中: $(grep -c MouseHook modules/gui/qt/components/interface_widgets.cpp || true)"
+echo "hpp 中 MouseHook 命中: $(grep -c MouseHook modules/gui/qt/components/interface_widgets.hpp || true)"
+sed -n '145,150p' modules/gui/qt/components/interface_widgets.cpp || true
 step "2/6 应用增强补丁"
 if [ -f /build/patch.diff ]; then
     if git apply --reverse --check /build/patch.diff >/dev/null 2>&1; then
