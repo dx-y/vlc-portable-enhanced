@@ -254,8 +254,19 @@ if [ $CRC -ne 0 ]; then
 fi
 echo "compat 编译完成"
 
+# mingw 的 WaitOnAddress 需要 synchronization 导入库；缓存复用的 config.mak 会跳过 configure，
+# 因此这里直接按库是否存在来修补 config.mak
+if [ -f /opt/gcc-x86_64-w64-mingw32/x86_64-w64-mingw32/lib/libsynchronization.a ]; then
+    echo "找到 libsynchronization.a，注入 -lsynchronization"
+    grep -q -- "-lsynchronization" config.mak || sed -i 's/^LIBS = /LIBS = -lsynchronization /' config.mak
+else
+    echo "未找到 libsynchronization.a，按 Windows 7 目标编译 src（回避 WaitOnAddress）"
+    CORE_XFLAGS="-D_WIN32_WINNT=0x0601"
+fi
+grep -E "^LIBS = " config.mak | head -1 || true
+
 set +e
-make -j"$(nproc)" -C src > /tmp/mk_core.log 2>&1
+make -j"$(nproc)" -C src CFLAGS="${CFLAGS:-} ${CORE_XFLAGS:-}" > /tmp/mk_core.log 2>&1
 RC=$?
 set -e
 tail -25 /tmp/mk_core.log
