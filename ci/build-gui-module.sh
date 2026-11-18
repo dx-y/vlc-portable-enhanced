@@ -185,7 +185,7 @@ grep -nE "PATH|MOC|qt|OPTIONS" "$SRC/extras/package/win32/configure.sh" | head -
 
 # mingw 的 WaitOnAddress 需要 synchronization 导入库
 if [ -f /opt/gcc-x86_64-w64-mingw32/x86_64-w64-mingw32/lib/libsynchronization.a ]; then
-    export LIBS="${LIBS:-} -lsynchronization"
+    export LIBS="${LIBS:-} /opt/gcc-x86_64-w64-mingw32/x86_64-w64-mingw32/lib/libsynchronization.a"
     echo "注入 LIBS=$LIBS"
 else
     echo "未找到 libsynchronization.a，将按 Windows 7 目标编译 src"
