@@ -339,6 +339,19 @@ if [ -d "$QTUI" ]; then
     echo "uic 生成 $UIC_RUN 个，失败 $UIC_FAIL 个"
 fi
 
+# Windows 资源对象 module.rc.lo 常因 windres 缺失而无效，单独处理
+if [ ! -s "$SRC/modules/module.rc.lo" ]; then
+    set +e
+    make -C modules module.rc.lo > /tmp/mk_rc.log 2>&1
+    set -e
+fi
+if [ -s "$SRC/modules/module.rc.lo" ] && grep -q "libtool" "$SRC/modules/module.rc.lo" 2>/dev/null; then
+    echo "module.rc.lo 有效"
+else
+    echo "::warning::module.rc.lo 无效，从 Makefile 中剔除该链接依赖"
+    sed -i 's#[^ ]*module\.rc\.lo##g' "$SRC/modules/Makefile"
+fi
+
 QT_OK=0
 for T in "gui/qt/libqt_plugin.la" "libqt_plugin.la"; do
     echo "--- 尝试目标: modules/$T"
