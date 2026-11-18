@@ -80,15 +80,20 @@ jobs:
         id: cache-src
         uses: actions/cache@v4
         with:
-          path: work/vlc-${{ steps.ver.outputs.version }}
-          key: vlc-build-${{ steps.ver.outputs.version }}-${{ hashFiles('patches/*.patch') }}-v1
+          path: |
+            work/vlc-${{ steps.ver.outputs.version }}
+            work/contrib-extract
+          key: vlc-build-${{ steps.ver.outputs.version }}-${{ hashFiles('patches/*.patch') }}-v2
 
       - name: Fetch prebuilt contrib (on runner)
-        if: steps.cache-src.outputs.cache-hit != 'true'
         env:
           IN_URL: ${{ github.event.inputs.contrib_url }}
         run: |
           set -euo pipefail
+          if [ -d work/contrib-extract/x86_64-w64-mingw32/lib ]; then
+            echo "contrib 已从缓存恢复，跳过下载"
+            exit 0
+          fi
           URL="${IN_URL:-$DEFAULT_CONTRIB_URL}"
           echo "下载: $URL"
           sudo apt-get update -qq

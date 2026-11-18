@@ -58,26 +58,38 @@ else
 fi
 
 # ---------------------------------------------------------------- 3. 构建工具
-step "3/6 准备 extras/tools"
-cd "$SRC/extras/tools"
-if [ ! -f Makefile ]; then
-    echo "extras/tools 未配置，执行 bootstrap"
-    ./bootstrap > /tmp/tools-boot.log 2>&1 || { echo "::error::extras/tools bootstrap 失败"; tail -25 /tmp/tools-boot.log; exit 9; }
-fi
-set +e
-make -j"$(nproc)" > /tmp/tools-make.log 2>&1
-TRC=$?
-set -e
-if [ $TRC -ne 0 ]; then
-    echo "::error::extras/tools 编译失败 (rc=$TRC)"
-    tail -35 /tmp/tools-make.log
-    exit 9
-fi
+step "3/6 检查 autotools"
 cd "$SRC"
-# 官方 build.sh 也把这份自编工具链放到 PATH 最前，configure/bootstrap 依赖它
-export PATH="$SRC/extras/tools/build/bin:$PATH"
-echo "autoconf: $(command -v autoconf || echo MISSING)"
-echo "automake: $(command -v automake || echo MISSING)"
+need_tools=0
+for t in autoconf automake libtoolize pkg-config msgfmt; do
+    if ! command -v "$t" > /dev/null 2>&1; then
+        echo "缺失: $t"
+        need_tools=1
+    fi
+done
+echo "autoconf:  $(autoconf --version 2>/dev/null | head -1)"
+echo "automake:  $(automake --version 2>/dev/null | head -1)"
+echo "libtoolize:$(libtoolize --version 2>/dev/null | head -1)"
+
+if [ "$need_tools" -eq 1 ]; then
+    step "3b/6 回退编译 extras/tools"
+    cd "$SRC/extras/tools"
+    if [ ! -f Makefile ]; then
+        echo "extras/tools 未配置，执行 bootstrap"
+        ./bootstrap > /tmp/tools-boot.log 2>&1 || { echo "::error::extras/tools bootstrap 失败"; tail -30 /tmp/tools-boot.log; exit 9; }
+    fi
+    set +e
+    make -j"$(nproc)" > /tmp/tools-make.log 2>&1
+    TRC=$?
+    set -e
+    if [ $TRC -ne 0 ]; then
+        echo "::error::extras/tools 编译失败 (rc=$TRC)"
+        tail -40 /tmp/tools-make.log
+        exit 9
+    fi
+    cd "$SRC"
+    export PATH="$SRC/extras/tools/build/bin:$PATH"
+fi
 
 # ---------------------------------------------------------------- 4. 预编译 contrib
 # 注意：官方镜像内没有 curl/wget，下载一律在 runner 侧完成，容器只负责使用。
