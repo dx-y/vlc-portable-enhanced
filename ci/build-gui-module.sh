@@ -153,6 +153,19 @@ else
         --host="$TRIPLET" \
         --with-contrib="$SRC/contrib/$CONTRIB_PREFIX" \
         --disable-lua \
+        --disable-faad \
+        --disable-flac \
+        --disable-theora \
+        --disable-avcodec \
+        --disable-merge-ffmpeg \
+        --disable-mpc \
+        --disable-libass \
+        --disable-live555 \
+        --disable-shout \
+        --disable-goom \
+        --disable-libcddb \
+        --disable-zvbi \
+        --disable-nls \
         > /tmp/cfg.log 2>&1
     RC=$?
     set -e
