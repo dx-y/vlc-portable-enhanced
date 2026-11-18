@@ -379,11 +379,23 @@ else
     sed -i 's#[^ ]*module\.rc\.lo##g' "$SRC/modules/Makefile"
 fi
 
+# mingw 运行库：Qt 静态库引用 __imp___p___argc 等 stdio 符号，必须显式链接
+MINGW_LIBS=""
+for L in ucrt msvcrt; do
+    LF=$(x86_64-w64-mingw32-gcc -print-file-name="lib$L.a" 2>/dev/null || echo "lib$L.a")
+    if [ -f "$LF" ]; then
+        MINGW_LIBS="$MINGW_LIBS -l$L"
+    fi
+done
+MOD_LIBS=$(grep -m1 -E "^LIBS *=" "$SRC/modules/Makefile" | sed 's/^LIBS *= *//' || true)
+echo "mingw 运行库: ${MINGW_LIBS:-（无）}"
+echo "modules LIBS: $MOD_LIBS"
+
 QT_OK=0
 for T in "gui/qt/libqt_plugin.la" "libqt_plugin.la"; do
     echo "--- 尝试目标: modules/$T"
     set +e
-    make -j"$(nproc)" -C modules "$T" > /tmp/mk_qt.log 2>&1
+    make -j"$(nproc)" -C modules "$T" LIBS="$MOD_LIBS $MINGW_LIBS" > /tmp/mk_qt.log 2>&1
     RC=$?
     set -e
     tail -25 /tmp/mk_qt.log
