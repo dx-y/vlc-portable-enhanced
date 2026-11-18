@@ -130,7 +130,8 @@ jobs:
           cd debs
           apt-get download libc6 libstdc++6 libgcc-s1
           for f in *.deb; do dpkg-deb -x "$f" ../glibc-root; done
-          ls -l ../glibc-root/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2
+          find ../glibc-root -name 'ld-linux-x86-64.so.2' | head -3
+          ls ../glibc-root/lib/x86_64-linux-gnu/ 2>/dev/null | head -3 || true
 
       - name: Build (container)
         env:

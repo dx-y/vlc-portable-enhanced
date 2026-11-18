@@ -145,9 +145,11 @@ for t in moc rcc uic; do printf "%s: " "$t"; command -v "$t" || echo MISSING; do
 # 官方 contrib 的 Qt 宿主工具需求新 glibc，容器自带 glibc 较旧 -> 用 /opt/glibc 里的动态链接器包装
 QTWRAP=/tmp/qtwrap
 mkdir -p "$QTWRAP"
-NEWLD=/opt/glibc/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2
-if [ -x "$NEWLD" ]; then
-    LIBS="/opt/glibc/lib/x86_64-linux-gnu:/opt/glibc/usr/lib/x86_64-linux-gnu"
+NEWLD=$(find /opt/glibc -name 'ld-linux-x86-64.so.2' -type f 2>/dev/null | head -1 || true)
+if [ -n "$NEWLD" ] && [ -x "$NEWLD" ]; then
+    LIBDIR="$(dirname "$NEWLD")"
+    LIBS="$LIBDIR:/opt/glibc/lib/x86_64-linux-gnu:/opt/glibc/usr/lib/x86_64-linux-gnu"
+    echo "--- 使用新 glibc: $NEWLD"
     for t in moc rcc uic; do
         cat > "$QTWRAP/$t" <<WRAPEOF
 #!/bin/sh
