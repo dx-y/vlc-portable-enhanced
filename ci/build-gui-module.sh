@@ -127,6 +127,19 @@ export PKG_CONFIG_PATH="$SRC/contrib/$CONTRIB_PREFIX/lib/pkgconfig"
 echo "PKG_CONFIG_LIBDIR=$PKG_CONFIG_LIBDIR"
 ls "$PKG_CONFIG_LIBDIR" 2>/dev/null | wc -l
 
+# Qt5 的 moc/rcc/uic 是宿主工具，configure 依赖它们在 PATH 里
+QTBIN=""
+for d in "$SRC/contrib/$CONTRIB_PREFIX/bin" "$SRC/contrib/$CONTRIB_PREFIX/lib/qt5/bin"; do
+    [ -d "$d" ] && QTBIN="$d:$QTBIN"
+done
+QT_MOC=$(find "$SRC/contrib/$CONTRIB_PREFIX" -maxdepth 5 -type f \( -name 'moc' -o -name 'moc.exe' -o -name 'moc-qt5' \) 2>/dev/null | head -1 || true)
+if [ -n "$QT_MOC" ]; then QTBIN="$(dirname "$QT_MOC"):$QTBIN"; fi
+if [ -n "$QTBIN" ]; then export PATH="$QTBIN$PATH"; fi
+echo "QTBIN=$QTBIN"
+echo "--- contrib/bin 内容 ---"
+ls "$SRC/contrib/$CONTRIB_PREFIX/bin" 2>/dev/null | head -30 || echo "(无 bin 目录)"
+for t in moc rcc uic; do printf "%s: " "$t"; command -v "$t" || echo MISSING; done
+
 # ---------------------------------------------------------------- 5. 配置
 # configure.sh 内部按 $(dirname $0)/../../../configure 定位，必须在源码根目录执行
 step "5/6 configure（复用官方 configure.sh）"
@@ -176,6 +189,10 @@ else
         exit 6
     fi
     echo "configure 完成"; grep -E "^(CFLAGS|CXXFLAGS)=" config.mak | head -2 || true
+    echo "--- configure 中 qt 相关判定 ---"
+    grep -iE "qt|moc|uic|rcc" /tmp/cfg.log | tail -25 || true
+    echo "--- config.mak 中 QT 变量 ---"
+    grep -iE "qt" config.mak | head -15 || true
 fi
 
 # ---------------------------------------------------------------- 6. 只编 GUI 模块
