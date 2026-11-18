@@ -72,8 +72,9 @@ jobs:
       - name: Pull official container image
         run: |
           set -euo pipefail
-          docker pull registry.videolan.org/vlc-debian-win64:latest
-          docker run --rm registry.videolan.org/vlc-debian-win64:latest bash -lc '
+          docker pull registry.videolan.org/vlc-debian-win64:20240122094311
+          docker run --rm registry.videolan.org/vlc-debian-win64:20240122094311 bash -lc '
+            echo "--- os ---"; cat /etc/os-release | head -3
             echo "--- gcc ---"; gcc --version | head -1
             echo "--- mingw ---"; x86_64-w64-mingw32-gcc --version | head -1
             echo "--- download tools ---"
@@ -137,7 +138,7 @@ jobs:
             -e VLC_VER="$VLC_VER" \
             -e CONTRIB_URL="$URL" \
             -e WORK=/build/work \
-            registry.videolan.org/vlc-debian-win64:latest \
+            registry.videolan.org/vlc-debian-win64:20240122094311 \
             bash /build/ci/build-gui-module.sh 2>&1 | tee build.log
           echo "exit=${PIPESTATUS[0]}"
 

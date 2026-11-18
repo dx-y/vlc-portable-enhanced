@@ -150,6 +150,11 @@ export ac_cv_prog_MOC="$MOC"
 export ac_cv_prog_RCC="$RCC"
 export ac_cv_prog_UIC="$UIC"
 echo "MOC=$MOC RCC=$RCC UIC=$UIC"
+echo "--- 容器系统 ---"; cat /etc/os-release 2>/dev/null | head -3
+QTINC="-I$SRC/contrib/$CONTRIB_PREFIX/include -I$SRC/contrib/$CONTRIB_PREFIX/include/QtCore -I$SRC/contrib/$CONTRIB_PREFIX/include/QtGui -I$SRC/contrib/$CONTRIB_PREFIX/include/QtWidgets"
+export CXXFLAGS="$CXXFLAGS $QTINC"
+export CFLAGS="$CFLAGS $QTINC"
+echo "CXXFLAGS=$CXXFLAGS"
 echo "--- 官方 configure.sh 的关键行 ---"
 grep -nE "PATH|MOC|qt|OPTIONS" "$SRC/extras/package/win32/configure.sh" | head -20 || true
 
