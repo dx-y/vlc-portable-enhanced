@@ -192,7 +192,14 @@ export ac_cv_prog_UIC="$UIC"
 export ac_cv_func_WaitOnAddress=no
 echo "MOC=$MOC RCC=$RCC UIC=$UIC"
 echo "--- 容器系统 ---"; cat /etc/os-release 2>/dev/null | head -3
-QTINC="-I$SRC/contrib/$CONTRIB_PREFIX/include -I$SRC/contrib/$CONTRIB_PREFIX/include/QtCore -I$SRC/contrib/$CONTRIB_PREFIX/include/QtGui -I$SRC/contrib/$CONTRIB_PREFIX/include/QtWidgets"
+QTBASE="$SRC/contrib/$CONTRIB_PREFIX/include"
+QTINC="-I$QTBASE"
+for q in "$QTBASE"/Qt*; do
+    [ -d "$q" ] && QTINC="$QTINC -I$q"
+done
+echo "Qt 头目录: $(echo "$QTINC" | tr ' ' '\n' | wc -l) 个"
+ls "$QTBASE" 2>/dev/null | grep -i qt | tr '\n' ' '; echo
+ls "$SRC/contrib/$CONTRIB_PREFIX/lib" 2>/dev/null | grep -iE "libQt5(Svg|Widgets|Gui)\.a" | tr '\n' ' '; echo
 export CXXFLAGS="${CXXFLAGS:-} $QTINC"
 export CFLAGS="${CFLAGS:-} $QTINC"
 echo "CXXFLAGS=$CXXFLAGS"
