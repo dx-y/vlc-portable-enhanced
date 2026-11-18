@@ -214,14 +214,28 @@ set -e
 [ $PIRC -eq 0 ] || echo "::warning::po 构建跳过 (rc=$PIRC)"
 
 echo "对象文件数: $(find . -name '*.o' 2>/dev/null | wc -l)"
-set +e
-make -j"$(nproc)" -C modules/gui/qt > /tmp/mk_qt.log 2>&1
-RC=$?
-set -e
-tail -35 /tmp/mk_qt.log
-if [ $RC -ne 0 ]; then
-    echo "::error::Qt GUI 模块编译失败 (rc=$RC)"
-    grep -iE "error|Error [0-9]" /tmp/mk_qt.log | tail -40 || true
+# VLC 3.0 的 modules 是非递归 automake，没有 modules/gui/qt/Makefile，
+# 需在源码根按 .la 目标构建 Qt 插件
+echo "Makefile 中 libqt_plugin 目标数: $(grep -c libqt_plugin Makefile || true)"
+QT_OK=0
+for T in "modules/gui/qt/libqt_plugin.la" "libqt_plugin.la"; do
+    echo "--- 尝试目标: $T"
+    set +e
+    make -j"$(nproc)" "$T" > /tmp/mk_qt.log 2>&1
+    RC=$?
+    set -e
+    tail -25 /tmp/mk_qt.log
+    if [ $RC -eq 0 ]; then
+        echo "Qt GUI 插件编译成功: $T"
+        QT_OK=1
+        break
+    fi
+    echo "--- 目标失败 (rc=$RC): $T"
+done
+
+if [ "$QT_OK" -ne 1 ]; then
+    echo "::error::Qt GUI 模块编译失败"
+    grep -iE "error|Error [0-9]|No rule|No targets" /tmp/mk_qt.log | tail -40 || true
     echo "--- 关键上下文 ---"
     grep -nE "moc|uic|rcc|qmake|fatal" /tmp/mk_qt.log | tail -20 || true
     exit 8
@@ -230,7 +244,7 @@ fi
 step "收集产物"
 mkdir -p /build/out
 FOUND=0
-for f in modules/gui/qt/.libs/*.dll modules/gui/qt/*.dll; do
+for f in modules/.libs/libqt_plugin.dll modules/gui/qt/.libs/*.dll modules/gui/qt/*.dll src/.libs/libvlccore.dll; do
     [ -f "$f" ] || continue
     cp -v "$f" /build/out/ && FOUND=1
 done
