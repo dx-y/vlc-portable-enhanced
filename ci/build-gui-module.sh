@@ -172,6 +172,8 @@ fi
 export ac_cv_prog_MOC="$MOC"
 export ac_cv_prog_RCC="$RCC"
 export ac_cv_prog_UIC="$UIC"
+# mingw 缺 WaitOnAddress 导入库时回退到 VLC 自带的等待实现
+export ac_cv_func_WaitOnAddress=no
 echo "MOC=$MOC RCC=$RCC UIC=$UIC"
 echo "--- 容器系统 ---"; cat /etc/os-release 2>/dev/null | head -3
 QTINC="-I$SRC/contrib/$CONTRIB_PREFIX/include -I$SRC/contrib/$CONTRIB_PREFIX/include/QtCore -I$SRC/contrib/$CONTRIB_PREFIX/include/QtGui -I$SRC/contrib/$CONTRIB_PREFIX/include/QtWidgets"
