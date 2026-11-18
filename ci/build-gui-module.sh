@@ -299,6 +299,23 @@ echo "--- 含 qt 的 Makefile ---"
 find . -name Makefile -path "*qt*" 2>/dev/null | head -5
 echo "--- modules/Makefile 中 qt 目标样本 ---"
 grep -oE "^[A-Za-z0-9_./-]+_plugin\.la:" modules/Makefile 2>/dev/null | head -10 || true
+# .ui 头文件属于 BUILT_SOURCES，单独构建 .la 目标时不会自动生成，先批量用 uic 生成
+QTUI="$SRC/modules/gui/qt/ui"
+if [ -d "$QTUI" ]; then
+    echo "--- 用 uic 预生成 .ui 头文件 ---"
+    UIC_RUN=0; UIC_FAIL=0
+    for ui in "$QTUI"/*.ui; do
+        [ -f "$ui" ] || continue
+        if "$UIC" "$ui" -o "${ui%.ui}.h" >/dev/null 2>&1; then
+            UIC_RUN=$((UIC_RUN+1))
+        else
+            UIC_FAIL=$((UIC_FAIL+1))
+            echo "uic 失败: $(basename "$ui")"
+        fi
+    done
+    echo "uic 生成 $UIC_RUN 个，失败 $UIC_FAIL 个"
+fi
+
 QT_OK=0
 for T in "gui/qt/libqt_plugin.la" "libqt_plugin.la"; do
     echo "--- 尝试目标: modules/$T"
