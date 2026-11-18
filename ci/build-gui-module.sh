@@ -140,6 +140,13 @@ echo "--- contrib/bin 内容 ---"
 ls "$SRC/contrib/$CONTRIB_PREFIX/bin" 2>/dev/null | head -30 || echo "(无 bin 目录)"
 for t in moc rcc uic; do printf "%s: " "$t"; command -v "$t" || echo MISSING; done
 
+# configure.sh 内部会重置 PATH，导致 AC_CHECK_PROGS 找不到宿主 Qt 工具，
+# 直接以环境变量显式指定（autoconf 优先采用环境变量）
+export MOC="$SRC/contrib/$CONTRIB_PREFIX/bin/moc"
+export RCC="$SRC/contrib/$CONTRIB_PREFIX/bin/rcc"
+export UIC="$SRC/contrib/$CONTRIB_PREFIX/bin/uic"
+echo "MOC=$MOC RCC=$RCC UIC=$UIC"
+
 # ---------------------------------------------------------------- 5. 配置
 # configure.sh 内部按 $(dirname $0)/../../../configure 定位，必须在源码根目录执行
 step "5/6 configure（复用官方 configure.sh）"
@@ -235,11 +242,17 @@ echo "对象文件数: $(find . -name '*.o' 2>/dev/null | wc -l)"
 # 需在源码根按 .la 目标构建 Qt 插件
 echo "Makefile 中 libqt_plugin 目标数: $(grep -c libqt_plugin Makefile || true)"
 QT_OK=0
-for T in "modules/gui/qt/libqt_plugin.la" "libqt_plugin.la"; do
+for T in "modules/gui/qt/libqt_plugin.la" "libqt_plugin.la" "modules/libqt_plugin.la"; do
     echo "--- 尝试目标: $T"
     set +e
-    make -j"$(nproc)" "$T" > /tmp/mk_qt.log 2>&1
-    RC=$?
+    if [ "${T#modules/}" != "$T" ]; then
+        make -j"$(nproc)" -C modules "$(basename "$T")" > /tmp/mk_qt.log 2>&1 || \
+        make -j"$(nproc)" "$T" > /tmp/mk_qt.log 2>&1
+        RC=$?
+    else
+        make -j"$(nproc)" "$T" > /tmp/mk_qt.log 2>&1
+        RC=$?
+    fi
     set -e
     tail -25 /tmp/mk_qt.log
     if [ $RC -eq 0 ]; then
