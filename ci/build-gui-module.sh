@@ -18,7 +18,16 @@ step() { echo; echo "===== [$(date -u +%H:%M:%S)] $* ====="; }
 # ---------------------------------------------------------------- 1. 源码
 step "1/6 获取 VLC 源码 $VLC_VER"
 if [ -d "$SRC/extras/package/win32" ]; then
-    echo "源码已存在，跳过"
+    HAVE_VER=$(grep -m1 -oE "AC_INIT\(\[?vlc\]?, *\[?[0-9.+]+" "$SRC/configure.ac" 2>/dev/null | grep -oE "[0-9]+\.[0-9]+(\.[0-9]+)?" | head -1 || true)
+    if [ -n "$HAVE_VER" ] && [ "$HAVE_VER" != "$VLC_VER" ]; then
+        echo "!! 缓存源码版本为 $HAVE_VER，与目标 $VLC_VER 不符，清空重建"
+        rm -rf "$SRC"
+    else
+        echo "源码已存在（版本 ${HAVE_VER:-未知}），跳过"
+    fi
+fi
+if [ -d "$SRC/extras/package/win32" ]; then
+    echo "复用现有源码树"
 else
     if git clone --depth 1 --branch "$VLC_VER" https://github.com/videolan/vlc.git "$SRC" 2>/dev/null; then
         echo "git clone 成功"
