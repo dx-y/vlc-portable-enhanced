@@ -1,0 +1,120 @@
+name: Probe - Qt GUI module only
+
+# 验证路径：官方 vlc-debian-win64 容器 + 官方预编译 contrib + 只编 GUI 模块
+# 产出 libqt_plugin.dll，用于后续「官方原包换 DLL + 外壳封装」的注入式交付形态。
+
+on:
+  workflow_dispatch:
+    inputs:
+      vlc_version:
+        description: 'VLC 版本（留空则用 3.0 分支最新正式版）'
+        required: false
+        default: ''
+      contrib_url:
+        description: '预编译 contrib 地址（留空用默认）'
+        required: false
+        default: ''
+
+permissions:
+  contents: read
+
+env:
+  UPSTREAM_REPO: videolan/vlc
+  DEFAULT_CONTRIB_URL: https://artifacts.videolan.org/vlc-3.0/win64/vlc-contrib-x86_64-w64-mingw32-910cc9cada6080dd777fbafb2ebdd0c24f702c30.tar.zst
+
+jobs:
+  probe:
+    name: Build libqt_plugin.dll
+    runs-on: ubuntu-24.04
+    timeout-minutes: 150
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Resolve version
+        id: ver
+        run: |
+          set -euo pipefail
+          INPUT="${{ github.event.inputs.vlc_version }}"
+          if [ -n "$INPUT" ]; then
+            VER="$INPUT"
+          else
+            VER=$(curl -fsSL "https://api.github.com/repos/${UPSTREAM_REPO}/tags?per_page=100" \
+              | jq -r '.[].name' | grep -E '^3\.0\.[0-9]+$' | sort -V | tail -1)
+          fi
+          [ -n "$VER" ] || { echo "无法解析版本"; exit 1; }
+          echo "version=$VER" >> "$GITHUB_OUTPUT"
+          echo "使用版本: $VER"
+
+      - name: Free disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
+                      /opt/hostedtoolcache/CodeQL /usr/local/lib/node_modules \
+                      /opt/az /usr/share/swift /usr/local/graalvm /usr/local/.ghcup || true
+          df -h /
+
+      - name: Prepare inputs
+        run: |
+          set -euo pipefail
+          mkdir -p out work
+          # 合并补丁为单文件
+          cat patches/*.patch > patch.diff
+          wc -l patch.diff
+          # 确保脚本为 LF 换行
+          sed -i 's/\r$//' ci/build-gui-module.sh
+          chmod +x ci/build-gui-module.sh
+          ls -la ci/
+
+      - name: Pull official container image
+        run: |
+          set -euo pipefail
+          docker pull registry.videolan.org/vlc-debian-win64:latest
+          docker run --rm registry.videolan.org/vlc-debian-win64:latest bash -lc '
+            echo "--- gcc ---"; gcc --version | head -1
+            echo "--- mingw ---"; x86_64-w64-mingw32-gcc --version | head -1
+            echo "--- zstd ---"; zstd --version 2>/dev/null || echo missing
+            echo "--- qt in contrib (will be fetched) ---"
+          '
+
+      - name: Build (container)
+        env:
+          VLC_VER: ${{ steps.ver.outputs.version }}
+          CONTRIB_URL: ${{ github.event.inputs.contrib_url }}
+        run: |
+          set -euo pipefail
+          URL="${CONTRIB_URL:-$DEFAULT_CONTRIB_URL}"
+          echo "VLC=$VLC_VER  CONTRIB=$URL"
+          docker run --rm \
+            -v "$PWD":/build \
+            -w /build \
+            -e VLC_VER="$VLC_VER" \
+            -e CONTRIB_URL="$URL" \
+            -e WORK=/build/work \
+            registry.videolan.org/vlc-debian-win64:latest \
+            bash /build/ci/build-gui-module.sh 2>&1 | tee build.log
+          echo "exit=${PIPESTATUS[0]}"
+
+      - name: Fix ownership
+        if: always()
+        run: sudo chown -R "$(id -u):$(id -g)" . || true
+
+      - name: Inspect result
+        if: always()
+        run: |
+          echo "=== out/ ==="
+          ls -la out/ 2>/dev/null || echo "no out dir"
+          echo "=== any dll ==="
+          find . -name '*.dll' -size +100k 2>/dev/null | head -20
+          echo "=== log tail ==="
+          tail -60 build.log 2>/dev/null || true
+
+      - name: Upload artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: qt-plugin-${{ steps.ver.outputs.version }}
+          path: |
+            out/
+            build.log
+          if-no-files-found: warn
+          retention-days: 7
