@@ -88,20 +88,22 @@ jobs:
           curl -fL --retry 3 --retry-delay 5 "$URL" -o work/contrib.tar.zst
           ls -lh work/contrib.tar.zst
           echo "=== 包内顶层结构 ==="
-          tar -I zstd -tf work/contrib.tar.zst | head -15
+          tar -I zstd -tf work/contrib.tar.zst > work/contrib-list.txt 2>&1 || true
+          head -15 work/contrib-list.txt
           mkdir -p work/contrib-extract
-          tar -I zstd -xf work/contrib.tar.zst -C work/contrib-extract
+          time tar -I zstd -xf work/contrib.tar.zst -C work/contrib-extract
           # 若内层还是压缩包，再解一层
           INNER=$(find work/contrib-extract -maxdepth 2 -type f \( -name '*.tar.zst' -o -name '*.tar.bz2' -o -name '*.tar.gz' -o -name '*.tar.xz' \) | head -1 || true)
           if [ -n "$INNER" ]; then
             echo "内层压缩包: $INNER"
-            tar -I zstd -xf "$INNER" -C work/contrib-extract 2>/dev/null \
-              || tar -xf "$INNER" -C work/contrib-extract
+            tar -I zstd -xf "$INNER" -C work/contrib-extract 2>/dev/null || true
           fi
           echo "=== 解包结果 ==="
           ls -la work/contrib-extract
-          find work/contrib-extract -maxdepth 3 -type d -name pkgconfig | head -3
           echo "contrib 解包体积: $(du -sh work/contrib-extract | cut -f1)"
+          test -d work/contrib-extract/x86_64-w64-mingw32 || { echo "::error::contrib 顶层目录缺失"; exit 3; }
+          test -d work/contrib-extract/x86_64-w64-mingw32/include || { echo "::error::contrib 缺少 include"; exit 3; }
+          echo "标志文件: $(ls work/contrib-extract/x86_64-w64-mingw32/lib/libQt5Core.a 2>/dev/null || echo '未找到 libQt5Core.a')"
 
       - name: Build (container)
         env:
