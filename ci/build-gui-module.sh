@@ -181,6 +181,19 @@ fi
 # ---------------------------------------------------------------- 6. 只编 GUI 模块
 step "6/6 编译 libvlccore + Qt GUI 插件"
 
+# libvlccore 链接依赖 compat 静态库，必须先编 compat
+set +e
+make -j"$(nproc)" -C compat > /tmp/mk_compat.log 2>&1
+CRC=$?
+set -e
+tail -10 /tmp/mk_compat.log
+if [ $CRC -ne 0 ]; then
+    echo "::error::compat 编译失败 (rc=$CRC)"
+    grep -iE "error|Error [0-9]" /tmp/mk_compat.log | tail -30 || true
+    exit 7
+fi
+echo "compat 编译完成"
+
 set +e
 make -j"$(nproc)" -C src > /tmp/mk_core.log 2>&1
 RC=$?
