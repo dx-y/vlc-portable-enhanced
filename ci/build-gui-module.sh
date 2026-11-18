@@ -121,6 +121,11 @@ fi
 echo "contrib 文件数: $(find "../$CONTRIB_PREFIX" -type f | wc -l)"
 cd "$SRC"
 export PATH="$SRC/contrib/$CONTRIB_PREFIX/bin:$PATH"
+# 关键：让 pkg-config 只认 contrib 里的 .pc，否则 faad/flac/theora 等全部判为缺失
+export PKG_CONFIG_LIBDIR="$SRC/contrib/$CONTRIB_PREFIX/lib/pkgconfig"
+export PKG_CONFIG_PATH="$SRC/contrib/$CONTRIB_PREFIX/lib/pkgconfig"
+echo "PKG_CONFIG_LIBDIR=$PKG_CONFIG_LIBDIR"
+ls "$PKG_CONFIG_LIBDIR" 2>/dev/null | wc -l
 
 # ---------------------------------------------------------------- 5. 配置
 # configure.sh 内部按 $(dirname $0)/../../../configure 定位，必须在源码根目录执行
