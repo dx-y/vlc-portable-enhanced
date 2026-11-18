@@ -76,7 +76,15 @@ jobs:
             for t in curl wget git; do printf "%s: " "$t"; command -v "$t" || echo MISSING; done
           '
 
+      - name: Cache VLC build tree (source + contrib + objects)
+        id: cache-src
+        uses: actions/cache@v4
+        with:
+          path: work/vlc-${{ steps.ver.outputs.version }}
+          key: vlc-build-${{ steps.ver.outputs.version }}-${{ hashFiles('patches/*.patch') }}-v1
+
       - name: Fetch prebuilt contrib (on runner)
+        if: steps.cache-src.outputs.cache-hit != 'true'
         env:
           IN_URL: ${{ github.event.inputs.contrib_url }}
         run: |
@@ -113,6 +121,7 @@ jobs:
           set -euo pipefail
           URL="${CONTRIB_URL:-$DEFAULT_CONTRIB_URL}"
           echo "VLC=$VLC_VER  CONTRIB=$URL"
+          echo "build-tree cache hit: ${{ steps.cache-src.outputs.cache-hit }}  (true=增量编译)"
           docker run --rm \
             -v "$PWD":/build \
             -w /build \
@@ -134,6 +143,9 @@ jobs:
           ls -la out/ 2>/dev/null || echo "no out dir"
           echo "=== any dll ==="
           find . -name '*.dll' -size +100k 2>/dev/null | head -20
+          echo "=== 缓存目录体积 ==="
+          du -sh work/* 2>/dev/null || true
+          df -h / | tail -2
           echo "=== log tail ==="
           tail -60 build.log 2>/dev/null || true
 
