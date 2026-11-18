@@ -147,6 +147,7 @@ else
     ./extras/package/win32/configure.sh \
         --host="$TRIPLET" \
         --with-contrib="$SRC/contrib/$CONTRIB_PREFIX" \
+        --disable-lua \
         > /tmp/cfg.log 2>&1
     RC=$?
     set -e
