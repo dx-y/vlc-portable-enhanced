@@ -1,0 +1,48 @@
+diff --git a/modules/gui/qt/components/interface_widgets.hpp b/modules/gui/qt/components/interface_widgets.hpp
+--- a/modules/gui/qt/components/interface_widgets.hpp
++++ b/modules/gui/qt/components/interface_widgets.hpp
+@@ -44,6 +44,14 @@
+ #include <QMouseEvent>
+ #include <QPropertyAnimation>
+ #include <QAbstractNativeEventFilter>
++#include <QTimer>
++
++#ifdef _WIN32
++# ifndef NOMINMAX
++#  define NOMINMAX
++# endif
++# include <windows.h>
++#endif
+ 
+ class QMenu;
+ class QSlider;
+@@ -62,6 +70,14 @@
+     bool request( struct vout_window_t * );
+     void release( bool forced );
+     void sync( void );
++
++    void cancelClickToPause();
++#ifdef _WIN32
++    void setupMouseHook();
++    void teardownMouseHook();
++    HWND currentVideoHwnd() const;
++    static LRESULT CALLBACK mouseLLHookProc( int, WPARAM, LPARAM );
++#endif
+ 
+ protected:
+     QPaintEngine *paintEngine() const Q_DECL_OVERRIDE
+@@ -92,6 +108,14 @@
+     bool enable_mouse_events;
+ 
+     void reportSize();
++
++    QTimer *clickToPauseTimer = nullptr;
++#ifdef _WIN32
++    static HHOOK        g_mouseHook;
++    static VideoWidget *g_hookOwner;
++    static POINT        g_clickPt;
++    static bool         g_dragging;
++#endif
+ 
+ signals:
+     void sizeChanged( int, int );
