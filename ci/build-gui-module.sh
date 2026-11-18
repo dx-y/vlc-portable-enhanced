@@ -145,7 +145,13 @@ for t in moc rcc uic; do printf "%s: " "$t"; command -v "$t" || echo MISSING; do
 export MOC="$SRC/contrib/$CONTRIB_PREFIX/bin/moc"
 export RCC="$SRC/contrib/$CONTRIB_PREFIX/bin/rcc"
 export UIC="$SRC/contrib/$CONTRIB_PREFIX/bin/uic"
+# AC_CHECK_PROGS 不读 MOC 环境变量，但读 autoconf 缓存变量 ac_cv_prog_*
+export ac_cv_prog_MOC="$MOC"
+export ac_cv_prog_RCC="$RCC"
+export ac_cv_prog_UIC="$UIC"
 echo "MOC=$MOC RCC=$RCC UIC=$UIC"
+echo "--- 官方 configure.sh 的关键行 ---"
+grep -nE "PATH|MOC|qt|OPTIONS" "$SRC/extras/package/win32/configure.sh" | head -20 || true
 
 # ---------------------------------------------------------------- 5. 配置
 # configure.sh 内部按 $(dirname $0)/../../../configure 定位，必须在源码根目录执行
