@@ -254,6 +254,11 @@ if [ $CRC -ne 0 ]; then
 fi
 echo "compat 编译完成"
 
+cd "$SRC"
+echo "--- 当前目录: $(pwd) ---"
+ls -la config.mak config.h Makefile 2>&1 | head -5
+echo "--- cfg.log 末尾 ---"; tail -15 /tmp/cfg.log 2>/dev/null || true
+
 # mingw 的 WaitOnAddress 需要 synchronization 导入库；缓存复用的 config.mak 会跳过 configure，
 # 因此这里直接按库是否存在来修补 config.mak
 if [ -f /opt/gcc-x86_64-w64-mingw32/x86_64-w64-mingw32/lib/libsynchronization.a ]; then
