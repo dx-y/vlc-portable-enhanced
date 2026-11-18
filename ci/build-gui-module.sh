@@ -279,6 +279,20 @@ done < <(find "$CONTRIB_ABS" -type f \( -name '*.la' -o -name '*.pc' \) 2>/dev/n
 echo "contrib 路径: $CONTRIB_ABS"
 echo "替换 @@CONTRIB_PREFIX@@ 的文件数: $LACNT"
 
+# 构建系统自身（config.mak / Makefile / libtool）也可能残留占位符
+MADE_CNT=0
+for f in "$SRC/config.mak" "$SRC/Makefile" "$SRC/libtool" "$SRC/modules/Makefile" "$SRC/po/Makefile" "$SRC/src/Makefile"; do
+    [ -f "$f" ] || continue
+    if grep -q "@@CONTRIB_PREFIX@@" "$f" 2>/dev/null; then
+        sed -i "s|@@CONTRIB_PREFIX@@|$CONTRIB_ABS|g" "$f"
+        MADE_CNT=$((MADE_CNT+1))
+        echo "已修正: $f"
+    fi
+done
+echo "构建系统文件修正数: $MADE_CNT"
+echo "--- 剩余占位符分布 ---"
+grep -rIl "@@CONTRIB_PREFIX@@" "$SRC" --include=Makefile --include='*.mak' --include='*.la' --include='*.pc' 2>/dev/null | head -10 || echo "(无)"
+
 # ---------------------------------------------------------------- 6. 只编 GUI 模块
 step "6/6 编译 libvlccore + Qt GUI 插件"
 
@@ -379,6 +393,8 @@ for T in "gui/qt/libqt_plugin.la" "libqt_plugin.la"; do
         break
     fi
     echo "--- 目标失败 (rc=$RC): modules/$T"
+    grep -n "@@CONTRIB_PREFIX@@" /tmp/mk_qt.log | head -5 || true
+    grep -nE "libtool:   error|undefined reference|not found" /tmp/mk_qt.log | head -12 || true
 done
 
 if [ "$QT_OK" -ne 1 ]; then
