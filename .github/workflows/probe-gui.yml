@@ -72,9 +72,36 @@ jobs:
           docker run --rm registry.videolan.org/vlc-debian-win64:latest bash -lc '
             echo "--- gcc ---"; gcc --version | head -1
             echo "--- mingw ---"; x86_64-w64-mingw32-gcc --version | head -1
-            echo "--- zstd ---"; zstd --version 2>/dev/null || echo missing
-            echo "--- qt in contrib (will be fetched) ---"
+            echo "--- download tools ---"
+            for t in curl wget git; do printf "%s: " "$t"; command -v "$t" || echo MISSING; done
           '
+
+      - name: Fetch prebuilt contrib (on runner)
+        env:
+          IN_URL: ${{ github.event.inputs.contrib_url }}
+        run: |
+          set -euo pipefail
+          URL="${IN_URL:-$DEFAULT_CONTRIB_URL}"
+          echo "下载: $URL"
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq zstd >/dev/null
+          curl -fL --retry 3 --retry-delay 5 "$URL" -o work/contrib.tar.zst
+          ls -lh work/contrib.tar.zst
+          echo "=== 包内顶层结构 ==="
+          tar -I zstd -tf work/contrib.tar.zst | head -15
+          mkdir -p work/contrib-extract
+          tar -I zstd -xf work/contrib.tar.zst -C work/contrib-extract
+          # 若内层还是压缩包，再解一层
+          INNER=$(find work/contrib-extract -maxdepth 2 -type f \( -name '*.tar.zst' -o -name '*.tar.bz2' -o -name '*.tar.gz' -o -name '*.tar.xz' \) | head -1 || true)
+          if [ -n "$INNER" ]; then
+            echo "内层压缩包: $INNER"
+            tar -I zstd -xf "$INNER" -C work/contrib-extract 2>/dev/null \
+              || tar -xf "$INNER" -C work/contrib-extract
+          fi
+          echo "=== 解包结果 ==="
+          ls -la work/contrib-extract
+          find work/contrib-extract -maxdepth 3 -type d -name pkgconfig | head -3
+          echo "contrib 解包体积: $(du -sh work/contrib-extract | cut -f1)"
 
       - name: Build (container)
         env:

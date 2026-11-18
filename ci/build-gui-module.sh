@@ -30,8 +30,8 @@ else
     fi
 fi
 cd "$SRC"
-
-# ---------------------------------------------------------------- 2. 打补丁
+[ -f modules/gui/qt/main_interface.cpp ] || { echo "::error::源码目录不完整，缺少 modules/gui/qt/main_interface.cpp"; exit 5; }
+echo "源码体积: $(du -sh "$SRC" | cut -f1)"
 step "2/6 应用增强补丁"
 if [ -f /build/patch.diff ]; then
     git init -q . 2>/dev/null || true
@@ -58,38 +58,33 @@ fi
 cd "$SRC"
 
 # ---------------------------------------------------------------- 4. 预编译 contrib
+# 注意：官方镜像内没有 curl/wget，下载一律在 runner 侧完成，容器只负责使用。
 step "4/6 部署官方预编译 contrib"
 mkdir -p "contrib/$SHORTARCH"
 cd "contrib/$SHORTARCH"
 
 if [ -d "../$CONTRIB_PREFIX/lib/pkgconfig" ] || [ -d "../$CONTRIB_PREFIX/include" ]; then
-    echo "contrib 已就位，跳过下载"
-else
-    if [ -f contrib-config.mak ] || [ -f config.mak ]; then
-        echo "bootstrap 已执行"
-    else
-        ../bootstrap --host="$TRIPLET" --prefix="../$CONTRIB_PREFIX" --disable-debug
-    fi
-    if make prebuilt PREBUILT_URL="$CONTRIB_URL"; then
-        echo "make prebuilt 成功"
-    else
-        echo "::warning::make prebuilt 失败，尝试手工解包"
-        curl -fL --retry 3 "$CONTRIB_URL" -o /tmp/contrib.tar.zst
-        rm -rf /tmp/cx && mkdir -p /tmp/cx
-        tar -I zstd -xf /tmp/contrib.tar.zst -C /tmp/cx
-        # 若内层仍是压缩包则再解一层
-        INNER=$(find /tmp/cx -maxdepth 2 -type f \( -name '*.tar.zst' -o -name '*.tar.bz2' -o -name '*.tar.gz' \) 2>/dev/null | head -1 || true)
-        if [ -n "$INNER" ]; then
-            tar -xf "$INNER" -C /tmp/cx
+    echo "contrib 已就位，跳过"
+elif [ -d /build/work/contrib-extract ]; then
+    CB=$(find /build/work/contrib-extract -maxdepth 3 -type d -name "$CONTRIB_PREFIX" 2>/dev/null | head -1 || true)
+    if [ -z "$CB" ]; then
+        if [ -d /build/work/contrib-extract/include ] || [ -d /build/work/contrib-extract/lib ]; then
+            CB=/build/work/contrib-extract
         fi
-        # 定位含 include/lib 的目录
-        BASE=$(dirname "$(find /tmp/cx -maxdepth 3 -type d -name pkgconfig 2>/dev/null | head -1)")
-        BASE=$(dirname "$BASE")
-        echo "contrib 根目录: $BASE"
-        rm -rf "../$CONTRIB_PREFIX"
-        cp -a "$BASE" "../$CONTRIB_PREFIX"
     fi
+    if [ -z "$CB" ]; then
+        echo "::error::宿主解包的 contrib 结构无法识别"
+        ls -la /build/work/contrib-extract | head -20
+        exit 4
+    fi
+    echo "使用宿主 contrib: $CB"
+    cp -a "$CB" "../$CONTRIB_PREFIX"
+else
+    echo "::error::宿主未提供预编译 contrib（预期 /build/work/contrib-extract）"
+    exit 4
 fi
+[ -d "../$CONTRIB_PREFIX/include" ] || { echo "::error::contrib 目录不完整"; exit 4; }
+echo "contrib 文件数: $(find "../$CONTRIB_PREFIX" -type f | wc -l)"
 cd "$SRC"
 export PATH="$SRC/contrib/$CONTRIB_PREFIX/bin:$PATH"
 
