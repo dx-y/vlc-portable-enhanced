@@ -263,8 +263,9 @@ cd "$SRC"
 ORIG_LIBS=$(grep -m1 -E "^LIBS *=" Makefile | sed 's/^LIBS *= *//')
 echo "--- 顶层 Makefile LIBS: $ORIG_LIBS"
 if [ -n "$SYNCLIB" ]; then
-    ORIG_LIBS="$ORIG_LIBS $SYNCLIB"
+    ORIG_LIBS="$ORIG_LIBS -lssp $SYNCLIB"
 fi
+echo "--- 实际链接 LIBS: $ORIG_LIBS"
 
 set +e
 make -j"$(nproc)" -C src LIBS="$ORIG_LIBS" CFLAGS="${CFLAGS:-} ${CORE_XFLAGS:-}" > /tmp/mk_core.log 2>&1
