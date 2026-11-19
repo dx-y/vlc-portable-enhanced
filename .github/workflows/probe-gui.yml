@@ -128,7 +128,16 @@ jobs:
           set -euo pipefail
           mkdir -p debs glibc-root
           cd debs
-          apt-get download libc6 libstdc++6 libgcc-s1
+          # runner 预置的 apt 索引可能指向已被镜像移除的 deb 版本（返回 404），先刷新索引
+          sudo apt-get update -qq
+          apt-get download libc6 libstdc++6 libgcc-s1 || {
+            echo "::warning::直接下载失败，按刷新后的索引解析可用版本重试"
+            for p in libc6 libstdc++6 libgcc-s1; do
+              V=$(apt-cache madison "$p" | awk -F'|' 'NR==1{gsub(/ /,"",$2); print $2}')
+              if [ -n "${V:-}" ]; then apt-get download "${p}=${V}" || true; fi
+            done
+          }
+          ls -1 *.deb || { echo "::error::未获取到任何 glibc deb"; exit 1; }
           for f in *.deb; do dpkg-deb -x "$f" ../glibc-root; done
           find ../glibc-root -name 'ld-linux-x86-64.so.2' | head -3
           ls ../glibc-root/lib/x86_64-linux-gnu/ 2>/dev/null | head -3 || true
