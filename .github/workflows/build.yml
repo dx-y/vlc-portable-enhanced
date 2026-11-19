@@ -118,15 +118,21 @@ jobs:
             echo "$PREFIX/bin" >> "$GITHUB_PATH"; exit 0
           fi
           sudo apt-get install -y -qq valac meson ninja-build bison perl pkg-config \
-                                    libglib2.0-dev libgsf-1-dev libgcab-dev libxml2-dev gettext
+                                    libglib2.0-dev libgsf-1-dev libgcab-dev libxml2-dev gettext \
+                                    libgirepository1.0-dev
           curl -fsSL -o /tmp/msitools.tar.xz \
             https://download.gnome.org/sources/msitools/0.103/msitools-0.103.tar.xz
           tar -xf /tmp/msitools.tar.xz -C /tmp
           cd /tmp/msitools-0.103
-          meson setup _build -Dintrospection=false --prefix="$PREFIX" -Dbuildtype=release
+          # 必须保留 introspection：wixl 依赖 libmsi_vapi，关掉 introspection 会让 wixl 目标被静默跳过
+          meson setup _build -Dintrospection=true --prefix="$PREFIX" -Dbuildtype=release
           meson compile -C _build
           meson install -C _build
           echo "$PREFIX/bin" >> "$GITHUB_PATH"
+          # wixl 运行时需要同前缀下的 libmsi-1.0.so，注册到动态链接器搜索路径
+          echo "$PREFIX/lib/x86_64-linux-gnu" | sudo tee /etc/ld.so.conf.d/wixl.conf >/dev/null
+          sudo ldconfig
+          ls -l "$PREFIX/bin" || true
           "$PREFIX/bin/wixl" --version || true
           test -x "$PREFIX/bin/wixl"
 
