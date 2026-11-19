@@ -104,6 +104,32 @@ jobs:
           sudo apt-get install -y -qq p7zip-full zip unzip zstd nsis msitools \
                                         binutils-mingw-w64-x86-64 uuid-runtime
 
+      # Ubuntu 的 msitools 包只带 msibuild/msidump 等 C 工具，wixl（Vala 实现）未随包分发。
+      # 因此在 runner 上从源码编一个 wixl 到 $HOME/wixl，并把 bin 目录注册进 PATH。
+      - name: Build wixl from source (msitools)
+        run: |
+          set -euo pipefail
+          PREFIX="$HOME/wixl"
+          if command -v wixl >/dev/null 2>&1; then
+            echo "wixl 已存在: $(command -v wixl)"; exit 0
+          fi
+          if [ -x "$PREFIX/bin/wixl" ]; then
+            echo "复用已编译的 wixl: $PREFIX/bin/wixl"
+            echo "$PREFIX/bin" >> "$GITHUB_PATH"; exit 0
+          fi
+          sudo apt-get install -y -qq valac meson ninja-build bison perl pkg-config \
+                                    libglib2.0-dev libgsf-1-dev libgcab-dev libxml2-dev gettext
+          curl -fsSL -o /tmp/msitools.tar.xz \
+            https://download.gnome.org/sources/msitools/0.103/msitools-0.103.tar.xz
+          tar -xf /tmp/msitools.tar.xz -C /tmp
+          cd /tmp/msitools-0.103
+          meson setup _build -Dintrospection=false --prefix="$PREFIX" -Dbuildtype=release
+          meson compile -C _build
+          meson install -C _build
+          echo "$PREFIX/bin" >> "$GITHUB_PATH"
+          "$PREFIX/bin/wixl" --version || true
+          test -x "$PREFIX/bin/wixl"
+
       - name: Prepare inputs
         run: |
           set -euo pipefail
@@ -344,6 +370,7 @@ jobs:
           print("wxs 文件数:", n)
           PY
           rc=0
+          command -v wixl || { echo "::error::wixl 不可用，无法生成 msi"; exit 1; }
           wixl -o "out/${TREE_NAME}.msi" /tmp/product.wxs || rc=$?
           if [ "$rc" != "0" ]; then echo "::error::wixl 打包失败"; exit 1; fi
           ls -lh out/*.msi
@@ -352,7 +379,14 @@ jobs:
         run: |
           set -euo pipefail
           cd out
-          sha256sum *.7z *.zip *.exe *.msi > SHA256SUMS.txt 2>/dev/null || true
+          : > SHA256SUMS.txt
+          for f in *.7z *.zip *.exe *.msi; do
+            if [ -f "$f" ]; then
+              sha256sum "$f" >> SHA256SUMS.txt
+            else
+              echo "::warning::缺失产物 $f"
+            fi
+          done
           cat SHA256SUMS.txt
           ls -lh
 
