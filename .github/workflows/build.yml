@@ -112,26 +112,42 @@ jobs:
         run: |
           set -euo pipefail
           PREFIX="$HOME/wixl"
-          sudo apt-get install -y -qq meson ninja-build pkg-config libglib2.0-dev \
-                                    libgirepository1.0-dev libzstd-dev zlib1g-dev
-          curl -fsSL -o /tmp/libgcab.tar.xz \
-            https://download.gnome.org/sources/libgcab/1.6/libgcab-1.6.tar.xz
-          rm -rf /tmp/libgcab-1.6
-          tar -xf /tmp/libgcab.tar.xz -C /tmp
-          cd /tmp/libgcab-1.6
+          # libgcab 1.6 在 download.gnome.org 上已不存在，GitLab 归档需要登录；
+          # 直接用 Ubuntu 源码包，和 apt 走同一个 archive，runner 上命中率最高。
+          sudo apt-get install -y -qq dpkg-dev meson ninja-build pkg-config \
+                                    libglib2.0-dev libgirepository1.0-dev zlib1g-dev
+          if [ -f /etc/apt/sources.list.d/ubuntu.sources ]; then
+            sudo sed -i 's/^Types: deb$/Types: deb deb-src/' /etc/apt/sources.list.d/ubuntu.sources
+          fi
+          sudo apt-get update -qq || true
+          rm -rf /tmp/libgcab-* /tmp/libgcab_*
+          cd /tmp
+          if ! apt-get source -qq libgcab; then
+            echo "::error::apt-get source libgcab 失败（deb-src 未启用或源不可用）"; exit 1
+          fi
+          SRC_DIR="$(ls -d /tmp/libgcab-[0-9]* | head -1)"
+          echo "源码目录: $SRC_DIR"
+          test -f "$SRC_DIR/meson.build" || { echo "::error::源码包内没有 meson.build"; exit 1; }
+          cd "$SRC_DIR"
           echo "--- 原始 deflate 调用 ---"
-          grep -rn "deflateInit2\|Z_DEFAULT_COMPRESSION" libgcab/ || true
-          test -f libgcab/gcab-zipper.c || { echo "::error::libgcab 源码结构变化，未找到 gcab-zipper.c"; exit 1; }
+          grep -rn "Z_DEFAULT_COMPRESSION\|deflateInit" libgcab/ || true
+          test -f libgcab/gcab-zipper.c || { echo "::error::未找到 gcab-zipper.c"; exit 1; }
           sed -i 's/Z_DEFAULT_COMPRESSION/9/g' libgcab/gcab-zipper.c
           if grep -q "Z_DEFAULT_COMPRESSION" libgcab/gcab-zipper.c; then
             echo "::error::deflate 级别替换未生效"; exit 1
           fi
           echo "--- 修改后 ---"
-          grep -rn "deflateInit2" libgcab/gcab-zipper.c || true
+          grep -rn "deflateInit" libgcab/gcab-zipper.c || true
           meson setup _build --prefix="$PREFIX" -Dbuildtype=release -Dintrospection=true
           meson compile -C _build
           meson install -C _build
-          ls -l "$PREFIX/lib"/*/libgcab* 2>/dev/null || ls -l "$PREFIX/lib"/libgcab* || true
+          echo "--- 安装结果 ---"
+          ls -l "$PREFIX"/lib/*/libgcab* "$PREFIX"/lib/libgcab* 2>/dev/null || true
+          ls -l "$PREFIX"/share/vala/vapi/ 2>/dev/null || true
+          if ! ls "$PREFIX"/lib/*/libgcab-1.0.so.0* "$PREFIX"/lib/libgcab-1.0.so.0* >/dev/null 2>&1; then
+            echo "::error::自编 libgcab 未安装到 $PREFIX"; exit 1
+          fi
+
 
       # Ubuntu 的 msitools 包只带 msibuild/msidump 等 C 工具，wixl（Vala 实现）未随包分发。
       # 因此在 runner 上从源码编一个 wixl 到 $HOME/wixl，并把 bin 目录注册进 PATH。
