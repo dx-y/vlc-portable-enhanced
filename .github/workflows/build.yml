@@ -1,287 +1,403 @@
-name: Build VLC Enhanced Portable
+name: Build VLC Enhanced
+
+# 交付路线（注入式）：
+#   1. 官方 vlc-debian-win64 容器 + 官方预编译 contrib，只编译被补丁影响的 GUI 模块
+#   2. 下载 VLC 官方 win64 原包，把编译出的 libqt_plugin.dll 换进去
+#   3. 重新封装为 7z / zip / exe(NSIS) / msi(MSI)，并发布 Release
+# 触发：每日检查上游 3.0.x 新正式版；也可手动指定版本强制重建。
 
 on:
-  schedule:
-    # 每天 02:30 (UTC+8) 检查上游是否发布新的 3.0.x 正式版
-    - cron: "30 18 * * *"
   workflow_dispatch:
     inputs:
       vlc_version:
-        description: "指定 VLC 版本号（如 3.0.24），留空则自动取 3.0 分支最新正式版"
+        description: 'VLC 版本（留空则取 3.0 分支最新正式版）'
         required: false
-        default: ""
+        default: ''
       contrib_url:
-        description: "预编译 contrib 包地址，留空则使用默认值"
+        description: '预编译 contrib 地址（留空用默认）'
         required: false
-        default: ""
-      mode:
-        description: "运行模式"
-        required: true
-        default: full
-        type: choice
-        options:
-          - full
-          - probe
+        default: ''
+      force:
+        description: '该版本已发布过也强制重建（填 1）'
+        required: false
+        default: ''
+  schedule:
+    - cron: '30 18 * * *'
 
 permissions:
   contents: write
-  issues: write
-
-concurrency:
-  group: build-vlc-enhanced
-  cancel-in-progress: false
 
 env:
   UPSTREAM_REPO: videolan/vlc
-  MINGW_HOST: x86_64-w64-mingw32
-  # 与 VLC 3.0.24（tag 时间 2026-09-22）最接近的官方预编译 contrib（3.0 分支 win64）
-  DEFAULT_CONTRIB_URL: "https://artifacts.videolan.org/vlc-3.0/win64/vlc-contrib-x86_64-w64-mingw32-910cc9cada6080dd777fbafb2ebdd0c24f702c30.tar.zst"
+  DEFAULT_CONTRIB_URL: https://artifacts.videolan.org/vlc-3.0/win64/vlc-contrib-x86_64-w64-mingw32-910cc9cada6080dd777fbafb2ebdd0c24f702c30.tar.zst
+  CONTAINER: registry.videolan.org/vlc-debian-win64:20240122094311
 
 jobs:
+  # ---------------------------------------------------------------- 版本解析
   resolve:
-    name: 解析上游版本
+    name: Resolve upstream version
     runs-on: ubuntu-24.04
     outputs:
-      version: ${{ steps.pick.outputs.version }}
-      need_build: ${{ steps.pick.outputs.need_build }}
+      version: ${{ steps.ver.outputs.version }}
+      need_build: ${{ steps.ver.outputs.need_build }}
     steps:
-      - name: 选择目标版本
-        id: pick
+      - name: Resolve version (git ls-remote, no API quota)
+        id: ver
         env:
           GH_TOKEN: ${{ github.token }}
-          INPUT_VERSION: ${{ inputs.vlc_version }}
-          MODE: ${{ github.event_name == 'workflow_dispatch' && inputs.mode || 'full' }}
+          IN_VERSION: ${{ github.event.inputs.vlc_version }}
+          IN_FORCE: ${{ github.event.inputs.force }}
         run: |
           set -euo pipefail
-          if [ -n "${INPUT_VERSION}" ]; then
-            V="${INPUT_VERSION}"
+          if [ -n "${IN_VERSION}" ]; then
+            VER="${IN_VERSION}"
+            echo "版本由手动输入指定: $VER"
           else
-            V=$(curl -sSf "https://api.github.com/repos/${UPSTREAM_REPO}/tags?per_page=100" \
-                | jq -r '.[].name' | grep -E '^3\.0\.[0-9]+$' | sort -V | tail -n1 || true)
+            VER=$(git ls-remote --tags --refs "https://github.com/${UPSTREAM_REPO}.git" \
+                  | awk '{print $2}' | sed 's|refs/tags/||' \
+                  | grep -E '^3\.0\.[0-9]+$' | sort -V | tail -1 || true)
+            if [ -z "${VER}" ]; then
+              echo "::error::未能从上游解析出 3.0.x 版本号"
+              exit 1
+            fi
+            echo "上游最新 3.0.x: $VER"
           fi
-          if [ -z "${V:-}" ]; then
-            echo "无法解析上游 3.0.x 版本号"; exit 1
-          fi
-          echo "目标版本：${V}"
-          echo "version=${V}" >> "$GITHUB_OUTPUT"
+          echo "version=$VER" >> "$GITHUB_OUTPUT"
 
-          TAG="v${V}-enhanced"
-          if [ "${MODE}" = "probe" ]; then
-            echo "probe 模式，强制执行"
+          if [ "${IN_FORCE}" = "1" ]; then
+            echo "force=1，强制重建"
             echo "need_build=true" >> "$GITHUB_OUTPUT"
-          elif gh release view "${TAG}" --repo "${{ github.repository }}" >/dev/null 2>&1; then
-            echo "发布 ${TAG} 已存在，本次跳过构建"
+            exit 0
+          fi
+          if gh release view "v${VER}-enhanced" --repo "${{ github.repository }}" >/dev/null 2>&1; then
+            echo "v${VER}-enhanced 已存在，本次跳过构建"
             echo "need_build=false" >> "$GITHUB_OUTPUT"
           else
-            echo "发布 ${TAG} 不存在，开始构建"
+            echo "v${VER}-enhanced 不存在，开始构建"
             echo "need_build=true" >> "$GITHUB_OUTPUT"
           fi
 
+  # ---------------------------------------------------------------- 构建打包
   build:
-    name: 编译与发布
+    name: Build + package
     needs: resolve
     if: needs.resolve.outputs.need_build == 'true'
     runs-on: ubuntu-24.04
-    timeout-minutes: 350
+    timeout-minutes: 150
     env:
       VLC_VER: ${{ needs.resolve.outputs.version }}
-      MODE: ${{ github.event_name == 'workflow_dispatch' && inputs.mode || 'full' }}
     steps:
-      - name: 检出本仓库
+      - name: Checkout
         uses: actions/checkout@v4
 
-      - name: 释放磁盘空间
+      - name: Free disk space
         run: |
-          echo "== 清理前 =="; df -h /
           sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
-            /usr/local/share/boost /opt/hostedtoolcache/CodeQL \
-            /usr/local/lib/node_modules /opt/az /usr/share/swift \
-            /usr/local/graalvm /usr/local/.ghcup 2>/dev/null || true
-          sudo docker image prune --all --force 2>/dev/null || true
-          sudo apt-get clean
-          echo "== 清理后 =="; df -h /
+                      /opt/hostedtoolcache/CodeQL /usr/local/lib/node_modules \
+                      /opt/az /usr/share/swift /usr/local/graalvm /usr/local/.ghcup || true
+          df -h /
 
-      - name: 安装交叉编译依赖
+      - name: Install host tools
         run: |
           set -euo pipefail
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
-            build-essential git curl wget ca-certificates jq unzip zip \
-            gcc-mingw-w64-x86-64 g++-mingw-w64-x86-64 mingw-w64-tools \
-            autoconf automake autopoint libtool libtool-bin pkg-config gettext \
-            yasm nasm cmake cvs subversion ragel bison flex \
-            p7zip-full bzip2 xz-utils zstd dos2unix \
-            protobuf-compiler protobuf-c-compiler \
-            libffi-dev libgcrypt20-dev \
-            meson ninja-build python3 python3-pip python3-setuptools \
-            python3-jinja2 python3-venv texinfo gperf \
-            nsis msitools
-          # 统一使用 posix 线程模型的 mingw 工具链
-          for p in x86_64-w64-mingw32-gcc x86_64-w64-mingw32-g++ \
-                   x86_64-w64-mingw32-gcc-ar x86_64-w64-mingw32-gcc-nm \
-                   x86_64-w64-mingw32-gcc-ranlib; do
-            for cand in /usr/bin/${p}-posix /usr/bin/${p}-win32; do
-              if [ -e "$cand" ]; then sudo update-alternatives --set "$p" "$cand" 2>/dev/null || true; fi
-            done
-          done
-          x86_64-w64-mingw32-gcc --version | head -n1
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq p7zip-full zip unzip zstd nsis msitools \
+                                        binutils-mingw-w64-x86-64 uuid-runtime
 
-      - name: 获取 VLC 源码
+      - name: Prepare inputs
         run: |
           set -euo pipefail
-          # 官方 tar.xz 由 make dist 生成，不含 extras/package/win32 打包脚本，
-          # 因此优先 git clone 取完整工作树（含 build.sh / NSIS / MSI 打包脚本）。
-          if git clone --depth 1 --branch "${VLC_VER}" \
-               https://github.com/videolan/vlc.git "vlc-${VLC_VER}"; then
-            echo "源码来源：git clone videolan/vlc tag ${VLC_VER}"
-          else
-            echo "::warning::git clone 失败，回退官方 tar.xz"
-            curl -fSL --retry 5 --retry-delay 5 -o vlc-src.tar.xz \
-              "https://download.videolan.org/pub/videolan/vlc/${VLC_VER}/vlc-${VLC_VER}.tar.xz"
-            tar xf vlc-src.tar.xz
-          fi
-          test -d "vlc-${VLC_VER}"
-          if [ ! -f "vlc-${VLC_VER}/extras/package/win32/build.sh" ]; then
-            echo "::error::源码缺少 extras/package/win32/build.sh，无法交叉编译打包"
-            ls -la "vlc-${VLC_VER}/extras/package" || true
-            exit 1
-          fi
-          echo "源码目录：vlc-${VLC_VER}（已确认含 win32 打包脚本）"
+          mkdir -p out work pkg official
+          cat patches/*.patch > patch.diff
+          wc -l patch.diff
+          sed -i 's/\r$//' ci/build-gui-module.sh
+          chmod +x ci/build-gui-module.sh
 
-      - name: 应用自制补丁
-        run: |
-          set -euo pipefail
-          cd "vlc-${VLC_VER}"
-          # git clone 场景下 .git 已存在且工作树干净，无需再建基线提交；
-          # tar 包场景下无 .git，需初始化并提交一次以便 git apply --3way 使用。
-          if [ ! -d .git ]; then git init -q .; fi
-          git config user.email "actions@github.com"
-          git config user.name "GitHub Actions"
-          git add -A
-          git commit -qm "upstream ${VLC_VER}" || echo "工作树与上游 ${VLC_VER} 一致，跳过基线提交"
-          shopt -s nullglob
-          for p in "${GITHUB_WORKSPACE}"/patches/*.patch; do
-            echo "::group::应用 $(basename "$p")"
-            git apply -p1 --3way --verbose "$p"
-            echo "::endgroup::"
-          done
+      - name: Pull official container image
+        run: docker pull "$CONTAINER"
 
-      - name: 确定 contrib 地址
+      - name: Cache build tree (source + contrib + objects)
+        id: cache-src
+        uses: actions/cache@v4
+        with:
+          path: |
+            work/vlc-${{ env.VLC_VER }}
+            work/contrib-extract
+          key: vlc-build-${{ env.VLC_VER }}-${{ hashFiles('patches/*.patch') }}-v3
+
+      - name: Fetch prebuilt contrib (on runner)
         env:
-          INPUT_CONTRIB_URL: ${{ inputs.contrib_url }}
+          IN_URL: ${{ github.event.inputs.contrib_url }}
         run: |
           set -euo pipefail
-          URL="${INPUT_CONTRIB_URL:-$DEFAULT_CONTRIB_URL}"
-          echo "CONTRIB_URL=${URL}" >> "$GITHUB_ENV"
-          echo "使用 contrib：${URL}"
+          if [ -d work/contrib-extract/x86_64-w64-mingw32/lib ]; then
+            echo "contrib 已从缓存恢复，跳过下载"
+            exit 0
+          fi
+          URL="${IN_URL:-$DEFAULT_CONTRIB_URL}"
+          echo "下载: $URL"
+          curl -fL --retry 3 --retry-delay 5 "$URL" -o work/contrib.tar.zst
+          ls -lh work/contrib.tar.zst
+          mkdir -p work/contrib-extract
+          time tar -I zstd -xf work/contrib.tar.zst -C work/contrib-extract
+          INNER=$(find work/contrib-extract -maxdepth 2 -type f \( -name '*.tar.zst' -o -name '*.tar.bz2' -o -name '*.tar.gz' -o -name '*.tar.xz' \) | head -1 || true)
+          if [ -n "$INNER" ]; then
+            echo "内层压缩包: $INNER"
+            tar -I zstd -xf "$INNER" -C work/contrib-extract 2>/dev/null || true
+          fi
+          echo "contrib 解包体积: $(du -sh work/contrib-extract | cut -f1)"
+          test -d work/contrib-extract/x86_64-w64-mingw32/include || { echo "::error::contrib 缺少 include"; exit 3; }
 
-      - name: 环境验证（probe 模式）
-        if: env.MODE == 'probe'
+      - name: Prepare newer glibc for Qt host tools
         run: |
           set -euo pipefail
-          cd "vlc-${VLC_VER}"
-          x86_64-w64-mingw32-gcc --version | head -n1
-          if printf "#include <crtdefs.h>\n#if defined(_UCRT) || (__MSVCRT_VERSION__ >= 0x1400)\n# error UCRT\n#endif\n" | x86_64-w64-mingw32-gcc -E - >/dev/null 2>&1; then echo "CRT=msvcrt"; else echo "CRT=ucrt"; fi
-          export FORCE_UNSAFE_CONFIGURE=1
-          make -C contrib prebuilt PREBUILT_URL="${CONTRIB_URL}"
-          ls contrib/x86_64-w64-mingw32/lib/libgcrypt.a
-          # 检查 contrib 里是否真的存在 UCRT 命名的 fstat64i32 依赖
-          x86_64-w64-mingw32-nm -u contrib/x86_64-w64-mingw32/lib/libgcrypt.a 2>/dev/null | grep -i "fstat\|stat64" | sort -u | head -n 10 || true
-          echo "== probe 完成 =="
+          mkdir -p debs glibc-root
+          cd debs
+          sudo apt-get update -qq
+          apt-get download libc6 libstdc++6 libgcc-s1 || {
+            echo "::warning::直接下载失败，按刷新后的索引解析可用版本重试"
+            for p in libc6 libstdc++6 libgcc-s1; do
+              V=$(apt-cache madison "$p" | awk -F'|' 'NR==1{gsub(/ /,"",$2); print $2}')
+              if [ -n "${V:-}" ]; then apt-get download "${p}=${V}" || true; fi
+            done
+          }
+          ls -1 *.deb || { echo "::error::未获取到任何 glibc deb"; exit 1; }
+          for f in *.deb; do dpkg-deb -x "$f" ../glibc-root; done
 
-      - name: 完整构建
-        if: env.MODE != 'probe'
+      - name: Build GUI module (container)
+        env:
+          IN_URL: ${{ github.event.inputs.contrib_url }}
         run: |
           set -euo pipefail
-          cd "vlc-${VLC_VER}"
-          export MAKEFLAGS="-j$(nproc)"
-          export FORCE_UNSAFE_CONFIGURE=1
-          # 预编译 contrib 由 UCRT 版 mingw 生成，与 Ubuntu 自带 msvcrt 工具链符号不兼容
-          # （fstat64i32 等），因此这里不用 -p，直接用本地工具链编译 contrib。
-          chmod +x extras/package/win32/build.sh
-          ./extras/package/win32/build.sh -a x86_64 -r -i r
+          URL="${IN_URL:-$DEFAULT_CONTRIB_URL}"
+          echo "VLC=${VLC_VER}  CONTRIB=$URL  cache_hit=${{ steps.cache-src.outputs.cache-hit }}"
+          docker run --rm --user root \
+            -v "$PWD":/build \
+            -w /build \
+            -e VLC_VER="${VLC_VER}" \
+            -e CONTRIB_URL="$URL" \
+            -e WORK=/build/work \
+            -v "$PWD/glibc-root":/opt/glibc:ro \
+            "$CONTAINER" \
+            bash /build/ci/build-gui-module.sh 2>&1 | tee build.log
 
-      - name: 生成安装包（NSIS / MSI）
-        if: env.MODE != 'probe'
+      - name: Fix ownership
+        if: always()
+        run: sudo chown -R "$(id -u):$(id -g)" . || true
+
+      - name: Verify built dll
+        run: |
+          set -euo pipefail
+          ls -l out/
+          test -f out/libqt_plugin.dll || { echo "::error::out/libqt_plugin.dll 未生成"; exit 1; }
+          BEFORE=$(stat -c %s out/libqt_plugin.dll)
+          echo "strip 前: $BEFORE 字节"
+          x86_64-w64-mingw32-strip --strip-unneeded out/libqt_plugin.dll || \
+            echo "::warning::strip 失败，保持原样"
+          AFTER=$(stat -c %s out/libqt_plugin.dll)
+          echo "strip 后: $AFTER 字节"
+          echo "BUILT_DLL_SIZE=$AFTER" >> "$GITHUB_ENV"
+
+      - name: Download official win64 packages
+        run: |
+          set -euo pipefail
+          BASE="https://download.videolan.org/pub/videolan/vlc/${VLC_VER}/win64"
+          curl -fL --retry 3 --retry-delay 5 -o "official/vlc-${VLC_VER}-win64.7z"  "${BASE}/vlc-${VLC_VER}-win64.7z"
+          curl -fL --retry 3 --retry-delay 5 -o "official/vlc-${VLC_VER}-win64.exe" "${BASE}/vlc-${VLC_VER}-win64.exe"
+          ls -lh official/
+
+      - name: Assemble portable tree (swap dll)
+        run: |
+          set -euo pipefail
+          cd pkg
+          7z x -y "../official/vlc-${VLC_VER}-win64.7z" >/dev/null
+          TREE=$(find . -maxdepth 1 -mindepth 1 -type d | head -1 || true)
+          echo "官方解包目录: $TREE"
+          test -n "$TREE" || { echo "::error::官方包解包后无顶层目录"; exit 1; }
+          test -f "$TREE/vlc.exe" || { echo "::error::官方包内未找到 vlc.exe"; exit 1; }
+          test -d "$TREE/plugins/gui" || { echo "::error::官方包内未找到 plugins/gui"; exit 1; }
+          cp "$TREE/plugins/gui/libqt_plugin.dll" "../out/libqt_plugin.official.dll"
+          echo "官方原版 dll: $(stat -c %s "$TREE/plugins/gui/libqt_plugin.dll") 字节"
+          cp "../out/libqt_plugin.dll" "$TREE/plugins/gui/libqt_plugin.dll"
+          echo "替换后 dll: $(stat -c %s "$TREE/plugins/gui/libqt_plugin.dll") 字节"
+          NEW="vlc-${VLC_VER}-enhanced-win64"
+          mv "$TREE" "$NEW"
+          echo "TREE_NAME=$NEW" >> "$GITHUB_ENV"
+
+      - name: Package 7z and zip
+        run: |
+          set -euo pipefail
+          cd pkg
+          NEW="${TREE_NAME}"
+          7z a -t7z  -mx=9 "../out/${NEW}.7z"  "$NEW" >/dev/null
+          7z a -tzip -mx=9 "../out/${NEW}.zip" "$NEW" >/dev/null
+          ls -lh ../out/
+
+      - name: Package NSIS installer (exe)
         continue-on-error: true
         run: |
-          set -uo pipefail
-          cd "vlc-${VLC_VER}/win64"
-          export PATH="/usr/x86_64-w64-mingw32/bin:${PATH}"
-          export FORCE_UNSAFE_CONFIGURE=1
-          echo "== release 7z =="
-          make package-win32-release || echo "::warning title=release7z::package-win32-release 失败，仅保留 core 便携包"
-          echo "== NSIS 安装包 =="
-          make package-win32-exe || echo "::warning title=nsis::NSIS 安装包生成失败，本次不提供 setup.exe"
-          echo "== MSI 安装包 =="
-          make package-msi || echo "::warning title=msi::MSI 生成失败，跳过"
-          ls -lh vlc-*.7z vlc-*.exe vlc-*.msi 2>/dev/null || true
+          set -euo pipefail
+          cat > installer.nsi <<'NSI'
+          Unicode true
+          !include "MUI2.nsh"
+          !ifndef VERSION
+            !define VERSION "0.0.0"
+          !endif
+          !ifndef SRCDIR
+            !define SRCDIR "pkg"
+          !endif
+          !ifndef OUTFILE
+            !define OUTFILE "out/setup.exe"
+          !endif
+          Name "VLC media player ${VERSION} Enhanced"
+          OutFile "${OUTFILE}"
+          InstallDir "$PROGRAMFILES64\VideoLAN\VLC"
+          InstallDirRegKey HKLM "Software\VideoLAN\VLC" ""
+          RequestExecutionLevel admin
+          SetCompressor /SOLID lzma
+          !insertmacro MUI_PAGE_DIRECTORY
+          !insertmacro MUI_PAGE_INSTFILES
+          !insertmacro MUI_LANGUAGE "SimpChinese"
+          !insertmacro MUI_LANGUAGE "English"
 
-      - name: 收集产物
-        if: env.MODE != 'probe'
+          Section "VLC Enhanced" SecMain
+            SetOutPath "$INSTDIR"
+            File /r "${SRCDIR}/*"
+            WriteUninstaller "$INSTDIR\uninstall-enhanced.exe"
+            CreateDirectory "$SMPROGRAMS\VLC Enhanced"
+            CreateShortCut "$SMPROGRAMS\VLC Enhanced\VLC media player.lnk" "$INSTDIR\vlc.exe"
+            CreateShortCut "$DESKTOP\VLC media player.lnk" "$INSTDIR\vlc.exe"
+            WriteRegStr HKLM "Software\VideoLAN\VLC" "" "$INSTDIR"
+            WriteRegStr HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\VLCEnhanced" "DisplayName" "VLC ${VERSION} Enhanced"
+            WriteRegStr HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\VLCEnhanced" "DisplayVersion" "${VERSION}"
+            WriteRegStr HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\VLCEnhanced" "Publisher" "dx-y"
+            WriteRegStr HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\VLCEnhanced" "UninstallString" "$INSTDIR\uninstall-enhanced.exe"
+          SectionEnd
+
+          Section "Uninstall"
+            RMDir /r "$INSTDIR"
+            Delete "$DESKTOP\VLC media player.lnk"
+            RMDir /r "$SMPROGRAMS\VLC Enhanced"
+            DeleteRegKey HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\VLCEnhanced"
+            DeleteRegKey HKLM "Software\VideoLAN\VLC"
+          SectionEnd
+          NSI
+          makensis -V2 \
+            -DVERSION="${VLC_VER}" \
+            -DSRCDIR="$PWD/pkg/${TREE_NAME}" \
+            -DOUTFILE="$PWD/out/${TREE_NAME}-setup.exe" \
+            installer.nsi
+          ls -lh out/*.exe
+
+      - name: Package MSI
+        continue-on-error: true
         run: |
           set -euo pipefail
-          mkdir -p out
-          find . -maxdepth 4 -type f \
-            \( -name "vlc-*-win64*.7z" -o -name "vlc-*-win64*.zip" \
-               -o -name "vlc-*-win64*.exe" -o -name "vlc-*.msi" \) \
-            -size +10M -print -exec cp -n {} out/ \; || true
-          cp "${GITHUB_WORKSPACE}"/patches/*.patch out/ 2>/dev/null || true
-          ls -lh out/
-          test "$(ls -A out)" || { echo "未收集到产物"; exit 1; }
+          python3 - "$PWD/pkg/${TREE_NAME}" "$PWD/out/${TREE_NAME}.msi" "$VLC_VER" <<'PY'
+          import os, sys, uuid
+          root, out, ver = sys.argv[1], sys.argv[2], sys.argv[3]
+          NS = "http://schemas.microsoft.com/wix/2006/wi"
+          def gid(s):
+              return "{" + str(uuid.uuid5(uuid.NAMESPACE_URL, s)).upper() + "}"
+          v4 = ver if ver.count(".") == 2 else ver + ".0"
+          dirs, files = {}, []
+          for dp, dns, fns in os.walk(root):
+              rel = os.path.relpath(dp, root)
+              did = "INSTALLDIR" if rel == "." else "D_" + gid(rel)[1:9]
+              dirs[did] = (rel, did)
+              for fn in fns:
+                  files.append((did, fn, os.path.join(dp, fn), rel))
+          lines = ['<?xml version="1.0" encoding="utf-8"?>',
+                   '<Wix xmlns="%s">' % NS,
+                   '  <Product Id="%s" Name="VLC %s Enhanced" Language="2052" Version="%s" Manufacturer="dx-y" UpgradeCode="%s">' % (gid("vlc-enhanced-product"), ver, v4, gid("vlc-enhanced-upgrade")),
+                   '    <Package InstallerVersion="300" Compressed="yes" InstallScope="perMachine" Platform="x64"/>',
+                   '    <Media Id="1" Cabinet="product.cab" EmbedCab="yes"/>',
+                   '    <Directory Id="TARGETDIR" Name="SourceDir">',
+                   '      <Directory Id="ProgramFiles64Folder">',
+                   '        <Directory Id="INSTALLDIR" Name="VLC">']
+          # 目录树按层级输出
+          children = {}
+          for did, (rel, _) in dirs.items():
+              if did == "INSTALLDIR":
+                  continue
+              parent = os.path.dirname(rel)
+              pid = "INSTALLDIR" if parent in ("", ".") else "D_" + gid(parent)[1:9]
+              children.setdefault(pid, []).append((did, os.path.basename(rel)))
+          def emit(did, ind):
+              for cid, name in sorted(children.get(did, [])):
+                  lines.append(" " * ind + '<Directory Id="%s" Name="%s">' % (cid, name))
+                  emit(cid, ind + 2)
+                  lines.append(" " * ind + '</Directory>')
+          emit("INSTALLDIR", 10)
+          lines += ['        </Directory>', '      </Directory>', '    </Directory>',
+                    '    <Feature Id="DefaultFeature" Title="VLC Enhanced" Level="1">',
+                    '      <ComponentGroupRef Id="Files"/>', '    </Feature>', '  </Product>',
+                    '  <Fragment>', '    <ComponentGroup Id="Files">']
+          n = 0
+          for did, fn, src, rel in files:
+              n += 1
+              lines += ['      <Component Id="C_%d" Directory="%s" Guid="%s">' % (n, did, gid(rel + "/" + fn)),
+                        '        <File Id="F_%d" Name="%s" Source="%s"/>' % (n, fn, src),
+                        '      </Component>']
+          lines += ['    </ComponentGroup>', '  </Fragment>', '</Wix>']
+          open("/tmp/product.wxs", "w", encoding="utf-8").write("\n".join(lines))
+          print("wxs 文件数:", n)
+          PY
+          rc=0
+          wixl -o "out/${TREE_NAME}.msi" /tmp/product.wxs || rc=$?
+          if [ "$rc" != "0" ]; then echo "::error::wixl 打包失败"; exit 1; fi
+          ls -lh out/*.msi
 
-      - name: 生成校验值
-        if: env.MODE != 'probe'
+      - name: Checksums
         run: |
           set -euo pipefail
           cd out
-          sha256sum * > SHA256SUMS.txt
+          sha256sum *.7z *.zip *.exe *.msi > SHA256SUMS.txt 2>/dev/null || true
           cat SHA256SUMS.txt
+          ls -lh
 
-      - name: 发布到本仓库
-        if: env.MODE != 'probe'
+      - name: Upload artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: vlc-enhanced-${{ env.VLC_VER }}
+          path: |
+            out/*.7z
+            out/*.zip
+            out/*.exe
+            out/*.msi
+            out/SHA256SUMS.txt
+            build.log
+          if-no-files-found: warn
+          retention-days: 14
+
+      - name: Publish release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           TAG="v${VLC_VER}-enhanced"
-          gh release create "$TAG" out/* \
-            --repo "${{ github.repository }}" \
-            --title "VLC ${VLC_VER} Enhanced (win64 便携包 + 安装包)" \
-            --notes "基于 VLC ${VLC_VER} 官方源码自动构建的 Windows x64 增强版，提供**便携包**与**安装包**两种形态，按需任选其一。
+          FILES=()
+          for f in out/*.7z out/*.zip out/*.exe out/*.msi out/SHA256SUMS.txt; do
+            if [ -f "$f" ]; then FILES+=("$f"); fi
+          done
+          echo "待发布文件数: ${#FILES[@]}"
+          if [ "${#FILES[@]}" -eq 0 ]; then echo "::error::没有可发布的产物"; exit 1; fi
+          printf '%s\n' "${FILES[@]}"
+          cat > notes.md <<EOF
+          VLC ${VLC_VER} 增强版（注入式构建）
 
-          ## 两种形态怎么选
-          | 产物 | 适用场景 | 特点 |
-          | --- | --- | --- |
-          | \`vlc-${VLC_VER}-win64.7z\` / \`.zip\` | 绿色免安装、放 U 盘、多版本共存 | 解压后运行 \`vlc.exe\`，不写注册表；**不自动关联视频文件**，需自行右键设为默认播放器 |
-          | \`vlc-${VLC_VER}-win64.exe\`（NSIS 安装包） | 日常主力使用 | 安装时自动注册文件关联与右键菜单、创建桌面/开始菜单快捷方式、可在"应用和功能"中卸载；**装完双击视频即可直接调用**，无需额外设置默认播放器 |
-          | \`vlc-${VLC_VER}-win64.msi\` | 企业批量部署 / 组策略分发 | 标准 Windows Installer 包，支持静默安装 |
+          - 内核与外壳：VLC 官方 ${VLC_VER} win64 原包，未改核心组件
+          - 增强模块：按本仓库 patches/ 重新编译的 libqt_plugin.dll（界面增强）
+          - 便携形态：7z / zip，解压即用
+          - 安装形态：exe / msi
 
-          > 建议：普通使用选 \`.exe\` 安装包；不想动系统就下 \`.7z\` 便携包。
-
-          ## 改动内容
-          - 竖屏视频按可用屏幕等比缩放窗口，消除左右黑边，越界自动钳制回屏幕内
-          - 视频窗口内单击播放/暂停，双击或拖动时自动取消
-
-          ## 构建方式
-          - 源码：https://download.videolan.org/pub/videolan/vlc/${VLC_VER}/vlc-${VLC_VER}.tar.xz
-          - 工具链：MSYS2/MinGW-w64 交叉编译（x86_64-w64-mingw32）
-          - 打包：7z/zip 便携包 + NSIS setup.exe + MSI
-          - 补丁：见附件 $(basename $(ls patches/*.patch | head -n1))
-          - 校验：见 SHA256SUMS.txt
-
-          本项目遵循 GPLv2+，完整对应源码可由上游发布包叠加上述补丁还原。"
-
-      - name: 补丁失效时提醒
-        if: failure()
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          TITLE="构建失败：VLC ${VLC_VER} 自动构建未完成"
-          BODY="自动构建在 $(date -u '+%Y-%m-%d %H:%M UTC') 失败，目标版本 ${VLC_VER}。
-          请查看运行日志：${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-
-          常见原因：上游改动导致 patches/ 下的补丁无法应用，需要更新补丁。"
-          if ! gh issue list --repo "${{ github.repository }}" --search "$TITLE in:title" --state open | grep -q .; then
-            gh issue create --repo "${{ github.repository }}" --title "$TITLE" --body "$BODY" || true
+          构建时间：$(date -u '+%Y-%m-%d %H:%M UTC')
+          EOF
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" "${FILES[@]}" --clobber
+          else
+            gh release create "$TAG" "${FILES[@]}" \
+              --title "VLC ${VLC_VER} Enhanced" \
+              --notes-file notes.md
           fi
