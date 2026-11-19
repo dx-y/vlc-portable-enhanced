@@ -104,6 +104,35 @@ jobs:
           sudo apt-get install -y -qq p7zip-full zip unzip zstd nsis msitools \
                                         binutils-mingw-w64-x86-64 uuid-runtime
 
+      # libgcab 生成 MSZIP 流时用 zlib 默认级别（deflate 6）。
+      # WXS 的 Media 没有可用的 CompressionLevel 支持（wixl 里 hardcode 成 GCab.Compression.MSZIP），
+      # 所以只能从 libgcab 层面把 deflate 级别提到 9 来缩小 msi。
+      - name: Build libgcab with max deflate level
+        continue-on-error: true
+        run: |
+          set -euo pipefail
+          PREFIX="$HOME/wixl"
+          sudo apt-get install -y -qq meson ninja-build pkg-config libglib2.0-dev \
+                                    libgirepository1.0-dev libzstd-dev zlib1g-dev
+          curl -fsSL -o /tmp/libgcab.tar.xz \
+            https://download.gnome.org/sources/libgcab/1.6/libgcab-1.6.tar.xz
+          rm -rf /tmp/libgcab-1.6
+          tar -xf /tmp/libgcab.tar.xz -C /tmp
+          cd /tmp/libgcab-1.6
+          echo "--- 原始 deflate 调用 ---"
+          grep -rn "deflateInit2\|Z_DEFAULT_COMPRESSION" libgcab/ || true
+          test -f libgcab/gcab-zipper.c || { echo "::error::libgcab 源码结构变化，未找到 gcab-zipper.c"; exit 1; }
+          sed -i 's/Z_DEFAULT_COMPRESSION/9/g' libgcab/gcab-zipper.c
+          if grep -q "Z_DEFAULT_COMPRESSION" libgcab/gcab-zipper.c; then
+            echo "::error::deflate 级别替换未生效"; exit 1
+          fi
+          echo "--- 修改后 ---"
+          grep -rn "deflateInit2" libgcab/gcab-zipper.c || true
+          meson setup _build --prefix="$PREFIX" -Dbuildtype=release -Dintrospection=true
+          meson compile -C _build
+          meson install -C _build
+          ls -l "$PREFIX/lib"/*/libgcab* 2>/dev/null || ls -l "$PREFIX/lib"/libgcab* || true
+
       # Ubuntu 的 msitools 包只带 msibuild/msidump 等 C 工具，wixl（Vala 实现）未随包分发。
       # 因此在 runner 上从源码编一个 wixl 到 $HOME/wixl，并把 bin 目录注册进 PATH。
       - name: Build wixl from source (msitools)
@@ -124,6 +153,10 @@ jobs:
             https://download.gnome.org/sources/msitools/0.103/msitools-0.103.tar.xz
           tar -xf /tmp/msitools.tar.xz -C /tmp
           cd /tmp/msitools-0.103
+          # 优先命中自编的 libgcab（deflate 级别 9），没有则回落到系统 libgcab-dev
+          export PKG_CONFIG_PATH="$PREFIX/lib/x86_64-linux-gnu/pkgconfig:$PREFIX/lib/pkgconfig:${PKG_CONFIG_PATH:-}"
+          pkg-config --modversion libgcab-1.0 || true
+          pkg-config --variable=libdir libgcab-1.0 || true
           # 必须保留 introspection：wixl 依赖 libmsi_vapi，关掉 introspection 会让 wixl 目标被静默跳过
           meson setup _build -Dintrospection=true --prefix="$PREFIX" -Dbuildtype=release
           meson compile -C _build
@@ -376,7 +409,10 @@ jobs:
           print("wxs 文件数:", n)
           PY
           rc=0
+          export LD_LIBRARY_PATH="$HOME/wixl/lib/x86_64-linux-gnu:$HOME/wixl/lib:${LD_LIBRARY_PATH:-}"
           command -v wixl || { echo "::error::wixl 不可用，无法生成 msi"; exit 1; }
+          echo "--- wixl 实际加载的 libgcab ---"
+          ldd "$(command -v wixl)" | grep -i gcab || true
           wixl -o "out/${TREE_NAME}.msi" /tmp/product.wxs || rc=$?
           if [ "$rc" != "0" ]; then echo "::error::wixl 打包失败"; exit 1; fi
           ls -lh out/*.msi
